@@ -1,141 +1,142 @@
-# Instant tissue field and magnetic susceptibility mapping from MRI raw phase using Laplacian enabled deep neural networks
+# iQSM – Instant Quantitative Susceptibility Mapping
 
-- Major update, 19, March, 2025: We now have new and more user-friendly matlab wrappers for iQSM+/iQSM/iQFM/xQSM/xQSM+ reconstuctions (with simpler syntaxes); see repo for deepMRI/iQSM_plus for more details. 
+**Instant Tissue Field and Magnetic Susceptibility Mapping from MRI Raw Phase using Laplacian Enabled Deep Neural Networks**
 
-- This repository is for a large-stencil Laplacian preprocessed deep neural network for near instant quantitative field and susceptibility mapping (i.e., iQFM and iQSM), enabling a single-step (end-to-end) local field and QSM reconstrcution from the raw MRI phase images, which is introduced in this paper: https://arxiv.org/abs/2111.07665 (under review).
+[NeuroImage 2022](https://www.sciencedirect.com/science/article/pii/S1053811922005274) &nbsp;|&nbsp; [arXiv](https://arxiv.org/abs/2111.07665) &nbsp;|&nbsp; [data & checkpoints](https://www.dropbox.com/sh/9kmbytgf3jpj7bh/AACUZJ1KlJ1AFCPMIVyRFJi5a?dl=0) &nbsp;|&nbsp; [deepMRI collection](https://github.com/sunhongfu/deepMRI)
 
-* This code was built and tested on Centos 7.8 with Nvdia Tesla V100 and macos12.0.1/ubuntu 19.10 with GTX 1060.
+iQSM enables single-step (end-to-end) local field and QSM reconstruction directly from raw MRI phase images, using a large-stencil Laplacian preprocessed deep neural network (LoT-Unet) — no separate background field removal needed.
 
-- It is recommended that the phase data of ultra-high resolution (higher than 0.7 mm) should be interpoloated into 1 mm for better reconstruction results.  
+> **Update (March 2025):** New user-friendly MATLAB wrappers for iQSM/iQFM/iQSM+/xQSM/xQSM+ with simpler syntax — see the [iQSM+](https://github.com/sunhongfu/iQSM_Plus) repo.
 
-# Content
+> **Tip:** For data with resolution finer than 0.7 mm isotropic, interpolate to 1 mm before reconstruction for best results.
 
-- [ Overview](#head1)
-  - [(1) Overall Framework](#head2)
-  - [(2) Representative Results](#head3)
-- [ Manual](#head4)
-  - [Requirements](#head5)
-    - [Codes Description](#head9)
-  - [Quick Start (on data)](#head6)
-  - [Reconstruction on your own data](#head7)
-  - [Train new iQSM and iQFM networks](#head8)
+---
 
-# <span id="head1"> Overview </span>
+## Overview
 
-## <span id="head2">(1) Overall Framework </span>
+### Framework
 
 ![Whole Framework](https://www.dropbox.com/s/7bxkyu1utxux76k/Figs_1.png?raw=1)
-Fig. 1: Overview of iQFM and iQSM framework using the proposed LoT-Unet architecture, composed of a tailored Lap-Layer and a 3D residual Unet.
 
-## <span id="head3">(2) Representative Results </span>
+Fig. 1: Overview of the iQFM and iQSM framework using the proposed LoT-Unet architecture, composed of a tailored Lap-Layer and a 3D residual U-net.
+
+### Representative Results
 
 ![Representative Results](https://www.dropbox.com/s/9jt391q22sgber6/Figs_2.png?raw=1)
-Fig. 2: Comparison of different QSM methods on three ICH patients. Susceptibility images of two orthogonal views are illustrated for each subject. Red arrows point to the artifacts near the hemorrhage sources in different QSM reconstructions.
 
-# <span id="head4"> Manual </span>
+Fig. 2: Comparison of different QSM methods on three ICH patients. Red arrows indicate artifacts near hemorrhage sources.
 
-## <span id="head5"> Requirements </span>
+---
 
-    - Python 3.7 or later
-    - NVDIA GPU (CUDA 10.0)
-    - Anaconda Navigator (4.6.11) for Pytorch Installation
-    - Pytorch 1.8 or later
-    - MATLAB 2017b or later
-    - BET tool from FSL tool box
+## Requirements
 
-## <span id="head9"> Codes Description </span>
+- Python 3.7+, PyTorch 1.8+
+- NVIDIA GPU (CUDA 10.0+)
+- MATLAB R2017b+ (for MATLAB wrapper)
+- FSL (for BET brain mask extraction)
 
-    Two main demo codes showing how to use iQSM for QSM reconstruction:
-        - demo_single_echo.m ---- Complete reconstruction pipeline on a COSMOS based single-echo simulated data.
-        - demo_multi_echo.m ---- Complete reconstruction pipeline for a in vivo multi-echo MRI phase data.
+Tested on: CentOS 7.8 (Tesla V100), macOS 12 / Ubuntu 19.10 (GTX 1060).
 
-    matlab files:
-        * Simulating datasets for network training or evaluation:
-            - 3D_Laplacian_Operator.mat ---- the 27-stencil point Laplacian kernel
-            - Simulate_Wrapped_Phase_From_QSM.m ---- simulation pipeline
-            - cropQSMs.m ---- generate QSM and backgound patches
-            - GenerateHealthyPatches.m ---- generate healthy training patches
-            - Gen_HemoCal.m ---- generate pathological training patches from healthy patches
-            - generate_one_source.m ---- generate one synthetic data from basic geometric shapes
+---
 
-        * network reconstruction:
-            - Save_Input.m ---- save phase, B0, TE, and mask information as a single .mat file for network reconstruction
-            - PythonRecon ---- Calling Pytorch file "Inference.py" for reconstruction
+## Quick Start
 
-    pytorch codes:
-        - Inference.py ---- Pytorch API for iQSM and iQFM reconstruction
-        - Unet.py, Unet_blocks.py, and LoT_Unet.py ---- implementation of LoT-Unet
-        - TrainingDataLoad.py ---- data loader during training
-        - TrainiQSM.py  ---- network training: iQSM
-        - TrainiQFM.py  ---- network training: iQFM
-        - TrainiQFM_and_iQSM.py  ---- train iQSM and iQFM simultaneously with data fidelity loss
-        - TrainiQFM_and_iQSM_16c.py  ---- network training (more learnable kernels in Lap-Layer)
+### 1. Clone and set up environment
 
-## <span id="head6"> Quick Start (on demo data) </span>
+```bash
+git clone https://github.com/sunhongfu/iQSM.git
+cd iQSM
 
-1. Clone this repository.
-
-```
-    git clone https://github.com/sunhongfu/deepMRI.git
+conda create -n iQSM python=3.8
+conda activate iQSM
+conda install pytorch cudatoolkit=10.2 -c pytorch
+conda install scipy
 ```
 
-2. Install prerequisites (on linux system);
-   1. Installl anaconda (https://docs.anaconda.com/anaconda/install/linux/);
-   2. open a terminal and create your conda environment to install Pytorch and supporting packages (scipy); the following is an example
-      ```
-          conda create --name Pytorch
-          conda activate Pytorch
-          conda install pytorch cudatoolkit=10.2 -c pytorch
-          conda install scipy
-      ```
-3. Download our demo data from Dropbox (https://www.dropbox.com/sh/9kmbytgf3jpj7bh/AACUZJ1KlJ1AFCPMIVyRFJi5a?dl=0)
+### 2. Download checkpoints and demo data
 
-4. Open a new terminal, and run the following command for single- and multi-echo MRI data, respectively; 
+Download from [Dropbox](https://www.dropbox.com/sh/9kmbytgf3jpj7bh/AACUZJ1KlJ1AFCPMIVyRFJi5a?dl=0) and place files in `iQSM_fcns/`.
 
-```
-    cd ./iQSM
-    conda activate Pytorch
-    matlab -nodisplay -r demo_single_echo
-    matlab -nodisplay -r demo_multi_echo
-```
-
-## <span id="head7"> Reconstruction on your own data </span>
-
-1. For single-echo data:
-   Replace the parameters in the "demo_single_echo.m" (line 10-20) with yours.
-   then run the matlab code
-   ```
-       cd ./iQSM
-       conda activate Pytorch
-       matlab -nodisplay -r demo_single_echo
-   ```
-2. For multi-echo data:
-   Replace the parameters in the "demo_multi_echo.m" (line 10-20) with yours.
-   then run the matlab code
-   ```
-       cd ./iQSM
-       conda activate Pytorch
-       matlab -nodisplay -r demo_multi_echo
-   ```
-
-## <span id="head8"> Train new networks </span>
-
-1. Prepare and preprocess your data with the code provided in folder 'iQSM_fcns':
+### 3. Run on demo data (MATLAB)
 
 ```matlab
-    matlab -nodispaly -r PrepareFullSizedImages.m
-    matlab -nodispaly -r cropQSMs.m
-    matlab -nodispaly -r GenerateHealthyPatches.m
-    matlab -nodispaly -r Gen_HemoCal.m
+% Single-echo
+demo_single_echo
+
+% Multi-echo
+demo_multi_echo
 ```
 
-2. Go to folder 'PythonCodes' and run the training codes:
+### 4. Run inference directly (Python)
 
-```python
-    python TrainiQSM.py or ...
-    python TrainiQFM.py or ...
-    python TrainiQFM_and_iQSM.py or ...
-    python TrainiQFM_and_iQSM_16c.py
+```bash
+conda activate iQSM
+python PythonCodes/Evaluation/Inference.py
 ```
 
-[⬆ top](#readme)
+---
+
+## MATLAB Wrapper Usage
+
+```matlab
+QSM = iQSM(phase, TE, 'mag', mag, 'mask', mask, 'voxel_size', [1,1,1], 'B0', 3, 'B0_dir', [0,0,1]);
+```
+
+**Compulsory inputs:**
+- `phase` — 3D (single-echo) or 4D (multi-echo) GRE phase volume
+- `TE` — echo time(s) in seconds, e.g. `20e-3` or `[4,8,12]*1e-3`
+
+**Optional inputs:**
+- `mag` — magnitude volume (default: ones)
+- `mask` — brain mask (default: ones)
+- `voxel_size` — resolution in mm (default: `[1 1 1]`)
+- `B0_dir` — B0 direction (default: `[0 0 1]` for axial)
+- `B0` — field strength in Tesla (default: `3`)
+- `output_dir` — output folder (default: current directory)
+
+---
+
+## Code Structure
+
+| File | Description |
+|------|-------------|
+| `demo_single_echo.m` | Full pipeline on single-echo simulated data |
+| `demo_multi_echo.m` | Full pipeline on multi-echo in vivo data |
+| `PythonCodes/Evaluation/Inference.py` | PyTorch inference API |
+| `PythonCodes/Evaluation/LoT_Unet.py` | LoT-Unet model |
+| `PythonCodes/Training/` | Training scripts for iQSM and iQFM |
+
+---
+
+## Training
+
+```matlab
+% Prepare training data
+matlab -nodisplay -r PrepareFullSizedImages
+matlab -nodisplay -r cropQSMs
+matlab -nodisplay -r GenerateHealthyPatches
+matlab -nodisplay -r Gen_HemoCal
+```
+
+```bash
+# Train networks
+python PythonCodes/Training/FixedLapLayer/TrainiQSM/TrainiQSM.py
+python PythonCodes/Training/FixedLapLayer/TrainiQFM/TrainiQFM.py
+```
+
+---
+
+## Citation
+
+```bibtex
+@article{gao2022instant,
+  title={Instant tissue field and magnetic susceptibility mapping from MRI raw phase using Laplacian enabled deep neural networks},
+  journal={NeuroImage},
+  year={2022},
+  doi={10.1016/j.neuroimage.2022.119327}
+}
+```
+
+---
+
+[⬆ top](#iqsm--instant-quantitative-susceptibility-mapping) &nbsp;|&nbsp; [deepMRI collection](https://github.com/sunhongfu/deepMRI)
