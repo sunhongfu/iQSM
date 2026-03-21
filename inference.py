@@ -2,6 +2,7 @@
 Pure Python inference pipeline for iQSM / iQFM.
 
 Reconstructs QSM (chi) and tissue field (lfs) from raw MRI phase without MATLAB.
+Uses the learnable LoT-layer architecture (iQSM v2 checkpoints).
 """
 
 import os
@@ -12,17 +13,18 @@ import numpy as np
 import nibabel as nib
 import torch
 import torch.nn as nn
-from scipy.ndimage import zoom, binary_erosion
+from scipy.ndimage import binary_erosion
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_EVAL_DIR = os.path.join(_HERE, "PythonCodes", "Evaluation")
+_LEARNABLE_DIR = os.path.join(_HERE, "PythonCodes", "Evaluation", "LearnableLapLayer")
 CHECKPOINTS_DIR = os.path.join(_HERE, "iQSM_fcns")
 
-if _EVAL_DIR not in sys.path:
-    sys.path.insert(0, _EVAL_DIR)
+if _LEARNABLE_DIR not in sys.path:
+    sys.path.insert(0, _LEARNABLE_DIR)
 
-from LoT_Unet import LoT_Unet, LoTLayer  # noqa: E402
+from LoT_Unet import LoT_Unet  # noqa: E402  (learnable version)
 from Unet import Unet  # noqa: E402
+from Unet_blocks import LoTLayer  # noqa: E402  (learnable LoTLayer)
 
 # ---------------------------------------------------------------------------
 # Auto-download checkpoints from GitHub Releases if not present locally
@@ -31,8 +33,10 @@ _CKPT_BASE = (
     "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
 )
 _CHECKPOINTS = {
-    "iQSM_UnetPart.pth": f"{_CKPT_BASE}/iQSM_UnetPart.pth",
-    "iQFM_UnetPart.pth": f"{_CKPT_BASE}/iQFM_UnetPart.pth",
+    "iQSM_50_v2.pth":        f"{_CKPT_BASE}/iQSM_50_v2.pth",
+    "LPLayer_chi_50_v2.pth": f"{_CKPT_BASE}/LPLayer_chi_50_v2.pth",
+    "iQFM_40_v2.pth":        f"{_CKPT_BASE}/iQFM_40_v2.pth",
+    "LoTLayer_lfs_40_v2.pth":f"{_CKPT_BASE}/LoTLayer_lfs_40_v2.pth",
 }
 
 
@@ -47,6 +51,7 @@ def _ensure_checkpoints():
             urllib.request.urlretrieve(url, dest)
             print(f"  Saved to {dest}")
 
+
 _CONV_OP = np.array(
     [
         [[1/13, 3/26, 1/13], [3/26, 3/13, 3/26], [1/13, 3/26, 1/13]],
@@ -59,27 +64,36 @@ _CONV_OP = np.array(
 _model_cache: dict = {}
 
 
+def _load_lot_layer(ckpt_path: str, device: torch.device) -> LoTLayer:
+    conv_op = torch.from_numpy(_CONV_OP).unsqueeze(0).unsqueeze(0)
+    layer = LoTLayer(conv_op)
+    layer = nn.DataParallel(layer)
+    layer.load_state_dict(torch.load(ckpt_path, map_location=device))
+    return layer.module
+
+
 def get_models(device: torch.device):
     """Load (or return cached) iQSM and iQFM models."""
     key = str(device)
     if key in _model_cache:
         return _model_cache[key]
 
-    conv_op = torch.from_numpy(_CONV_OP).unsqueeze(0).unsqueeze(0)
-    lot_layer = LoTLayer(conv_op)
+    ckpt = CHECKPOINTS_DIR
 
-    unet_chi = Unet(4, 1, 1)
+    lot_chi = _load_lot_layer(os.path.join(ckpt, "LPLayer_chi_50_v2.pth"), device)
+    unet_chi = Unet(4, 16, 1)
     unet_chi = nn.DataParallel(unet_chi)
-    unet_chi.load_state_dict(torch.load(os.path.join(CHECKPOINTS_DIR, "iQSM_UnetPart.pth"), map_location=device))
+    unet_chi.load_state_dict(torch.load(os.path.join(ckpt, "iQSM_50_v2.pth"), map_location=device))
     unet_chi = unet_chi.module
 
-    unet_lfs = Unet(4, 1, 1)
+    lot_lfs = _load_lot_layer(os.path.join(ckpt, "LoTLayer_lfs_40_v2.pth"), device)
+    unet_lfs = Unet(4, 16, 1)
     unet_lfs = nn.DataParallel(unet_lfs)
-    unet_lfs.load_state_dict(torch.load(os.path.join(CHECKPOINTS_DIR, "iQFM_UnetPart.pth"), map_location=device))
+    unet_lfs.load_state_dict(torch.load(os.path.join(ckpt, "iQFM_40_v2.pth"), map_location=device))
     unet_lfs = unet_lfs.module
 
-    iqsm = LoT_Unet(lot_layer, unet_chi).to(device).eval()
-    iqfm = LoT_Unet(LoTLayer(conv_op), unet_lfs).to(device).eval()
+    iqsm = LoT_Unet(lot_chi, unet_chi).to(device).eval()
+    iqfm = LoT_Unet(lot_lfs, unet_lfs).to(device).eval()
 
     _model_cache[key] = (iqsm, iqfm)
     return iqsm, iqfm
@@ -156,11 +170,6 @@ def run_iqsm(
     phase_img = nib.load(phase_nii_path)
     phase = phase_img.get_fdata(dtype=np.float32)
     affine = phase_img.affine
-
-    if voxel_size is not None:
-        vox = np.array(voxel_size, dtype=np.float64)
-    else:
-        vox = np.array(phase_img.header.get_zooms()[:3], dtype=np.float64)
 
     phase = float(phase_sign) * phase.astype(np.float32)
 
