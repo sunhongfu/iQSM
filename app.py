@@ -41,7 +41,7 @@ _DEMO_TE         = 0.020   # seconds
 _DEMO_B0         = 3.0     # Tesla
 _DEMO_VOX        = "1 1 1" # mm
 _DEMO_ERODED_RAD = 3
-_DEMO_PHASE_SIGN = False   # negate_phase checkbox (False = phase_sign -1)
+_DEMO_PHASE_SIGN = True    # negate_phase checkbox (True = phase_sign +1)
 
 
 def _download_demo() -> tuple[str, str]:
@@ -85,7 +85,7 @@ def load_and_run_demo(progress=gr.Progress(track_tqdm=True)):
             voxel_size=[1, 1, 1],
             b0=_DEMO_B0,
             eroded_rad=_DEMO_ERODED_RAD,
-            phase_sign=-1,
+            phase_sign=1 if _DEMO_PHASE_SIGN else -1,
             output_dir=output_dir,
             progress_fn=_progress,
         )
