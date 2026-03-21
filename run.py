@@ -43,11 +43,38 @@ def _download_demo() -> tuple[str, str]:
 
 
 def run_demo(output_dir: str):
-    print("── iQSM demo ──────────────────────────────────────────────────")
-    print(f"  Data cached at: {_DEMO_CACHE_DIR}")
-    print("  Parameters: 1×1×1 mm, TE=20 ms, B0=3T, phase_sign=+1")
-    print("────────────────────────────────────────────────────────────────")
+    print("── iQSM demo ──────────────────────────────────────────────────────────")
+    print("  Downloading demo data (cached after first run) …")
     phase_path, mask_path = _download_demo()
+
+    print(f"""
+  Demo dataset: single-echo in-vivo brain
+    Phase:      {phase_path}
+    Mask:       {mask_path}
+    Voxel size: 1 × 1 × 1 mm
+    TE:         20 ms  (0.020 s)
+    B0:         3 T
+    phase_sign: +1  (scanner stores phase with opposite sign)
+
+  To run on your own data, use an equivalent command:
+
+    python run.py \\
+        --phase  YOUR_PHASE.nii.gz \\
+        --mask   YOUR_MASK.nii.gz  \\
+        --te     0.020             \\
+        --b0     3.0               \\
+        --voxel-size 1 1 1         \\
+        --eroded-rad 3             \\
+        --phase-sign 1             \\
+        --output ./results/
+
+  Or edit config.yaml and run:
+
+    python run.py --config config.yaml
+
+  Running demo now …
+────────────────────────────────────────────────────────────────────────""")
+
     qsm_path, lfs_path = run_iqsm(
         phase_nii_path=phase_path,
         te=0.020,
@@ -61,6 +88,7 @@ def run_demo(output_dir: str):
     print(f"\nOutputs:")
     print(f"  QSM (susceptibility): {qsm_path}")
     print(f"  LFS (tissue field):   {lfs_path}")
+    print(f"\nOpen results in FSLeyes / ITK-SNAP / 3D Slicer.")
 
 
 # ---------------------------------------------------------------------------
