@@ -105,7 +105,6 @@ def _load_config(path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def main():
-    # Pre-parse --demo and --config before building the full parser.
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--demo",   action="store_true")
     pre.add_argument("--config", metavar="FILE")
