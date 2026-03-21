@@ -14,6 +14,8 @@ services:
       - "7860:7860"
     volumes:
       - ./outputs:/tmp/iqsm_outputs
+      - ./demo:/iQSM/demo               # demo NIfTIs — persists across restarts
+      - ./iQSM_fcns:/iQSM/iQSM_fcns    # model checkpoints — persists across restarts
     restart: unless-stopped
 
     # NVIDIA GPU – uncomment below for Linux + NVIDIA GPU, set TORCH_VARIANT=cu121
