@@ -39,25 +39,68 @@ Tested on: CentOS 7.8 (Tesla V100), macOS 12 / Ubuntu 19.10 (GTX 1060).
 
 ---
 
-## Quick Start
+## Quick Start — Web App (no MATLAB needed)
 
-### 1. Clone and set up environment
+The easiest way to run iQSM. Pretrained checkpoints and demo data download automatically.
+
+### Option A: Docker (recommended — zero setup)
+
+```bash
+git clone https://github.com/sunhongfu/iQSM.git
+cd iQSM
+docker compose up
+```
+
+Open **http://localhost:7860** in your browser.
+Click **⚡ Run demo** to try it instantly, or upload your own phase NIfTI.
+
+> For NVIDIA GPU support, edit `docker-compose.yml` and set `TORCH_VARIANT=cu121`, then uncomment the GPU block.
+
+### Option B: Conda
 
 ```bash
 git clone https://github.com/sunhongfu/iQSM.git
 cd iQSM
 
-conda create -n iQSM python=3.8
-conda activate iQSM
-conda install pytorch cudatoolkit=10.2 -c pytorch
-conda install scipy
+conda env create -f environment.yml
+conda activate iqsm
+
+python app.py
 ```
 
-### 2. Download checkpoints and demo data
+Open **http://localhost:7860** in your browser.
 
-Download from [Dropbox](https://www.dropbox.com/sh/9kmbytgf3jpj7bh/AACUZJ1KlJ1AFCPMIVyRFJi5a?dl=0) and place files in `iQSM_fcns/`.
+### Option C: pip
 
-### 3. Run on demo data (MATLAB)
+```bash
+git clone https://github.com/sunhongfu/iQSM.git
+cd iQSM
+
+pip install torch          # CPU — or see requirements.txt for GPU options
+pip install -r requirements.txt
+
+python app.py
+```
+
+Open **http://localhost:7860** in your browser.
+
+> **Checkpoints** (`iQSM_UnetPart.pth`, `iQFM_UnetPart.pth`) are downloaded automatically
+> into `iQSM_fcns/` on first run (~34 MB total). They are also available manually from
+> [Dropbox](https://www.dropbox.com/sh/9kmbytgf3jpj7bh/AACUZJ1KlJ1AFCPMIVyRFJi5a?dl=0).
+
+---
+
+## Quick Start — MATLAB Wrapper
+
+### 1. Clone and download checkpoints
+
+```bash
+git clone https://github.com/sunhongfu/iQSM.git
+```
+
+Download checkpoints and demo data from [Dropbox](https://www.dropbox.com/sh/9kmbytgf3jpj7bh/AACUZJ1KlJ1AFCPMIVyRFJi5a?dl=0) and place `.pth` files in `iQSM_fcns/`.
+
+### 2. Run on demo data
 
 ```matlab
 % Single-echo
@@ -65,13 +108,6 @@ demo_single_echo
 
 % Multi-echo
 demo_multi_echo
-```
-
-### 4. Run inference directly (Python)
-
-```bash
-conda activate iQSM
-python PythonCodes/Evaluation/Inference.py
 ```
 
 ---

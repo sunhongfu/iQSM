@@ -24,6 +24,29 @@ if _EVAL_DIR not in sys.path:
 from LoT_Unet import LoT_Unet, LoTLayer  # noqa: E402
 from Unet import Unet  # noqa: E402
 
+# ---------------------------------------------------------------------------
+# Auto-download checkpoints from GitHub Releases if not present locally
+# ---------------------------------------------------------------------------
+_CKPT_BASE = (
+    "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
+)
+_CHECKPOINTS = {
+    "iQSM_UnetPart.pth": f"{_CKPT_BASE}/iQSM_UnetPart.pth",
+    "iQFM_UnetPart.pth": f"{_CKPT_BASE}/iQFM_UnetPart.pth",
+}
+
+
+def _ensure_checkpoints():
+    """Download missing checkpoint files from GitHub Releases."""
+    import urllib.request
+    os.makedirs(CHECKPOINTS_DIR, exist_ok=True)
+    for filename, url in _CHECKPOINTS.items():
+        dest = os.path.join(CHECKPOINTS_DIR, filename)
+        if not os.path.exists(dest):
+            print(f"Downloading checkpoint {filename} …")
+            urllib.request.urlretrieve(url, dest)
+            print(f"  Saved to {dest}")
+
 _CONV_OP = np.array(
     [
         [[1/13, 3/26, 1/13], [3/26, 3/13, 3/26], [1/13, 3/26, 1/13]],
@@ -156,6 +179,7 @@ def run_iqsm(
     mask_pad, _ = _zero_pad(mask)
 
     _log(0.25, "Loading models …")
+    _ensure_checkpoints()
     iqsm, iqfm = get_models(device)
 
     te_t = torch.tensor([te], dtype=torch.float32).to(device)
