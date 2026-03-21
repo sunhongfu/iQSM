@@ -1,0 +1,21 @@
+# iQSM configuration
+# Run: python run.py --config config.yaml
+
+# --- Required ---
+phase: ph.nii.gz          # wrapped phase NIfTI (single-echo 3D)
+te: 0.020                 # echo time in seconds
+
+# --- Optional inputs ---
+mask: null                # brain mask NIfTI (null = ones)
+voxel_size: null          # [x, y, z] in mm — null reads from NIfTI header
+                          # e.g.  voxel_size: [1.0, 1.0, 1.0]
+
+# --- Acquisition ---
+b0: 3.0                   # field strength in Tesla
+phase_sign: -1            # sign convention: -1 or +1
+
+# --- Processing ---
+eroded_rad: 3             # mask erosion radius in voxels
+
+# --- Output ---
+output: ./iqsm_output
