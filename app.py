@@ -34,7 +34,7 @@ _DEMO_BASE = (
 )
 _DEMO_PHASE = f"{_DEMO_BASE}/ph_single_echo.nii.gz"
 _DEMO_MASK  = f"{_DEMO_BASE}/mask_single_echo.nii.gz"
-_DEMO_CACHE_DIR = os.path.join(tempfile.gettempdir(), "iqsm_demo")
+_DEMO_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
 
 # Demo acquisition parameters
 _DEMO_TE         = 0.020   # seconds

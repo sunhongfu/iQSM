@@ -22,7 +22,7 @@ from inference import run_iqsm
 # Demo data (mirrors app.py)
 # ---------------------------------------------------------------------------
 _DEMO_BASE      = "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
-_DEMO_CACHE_DIR = os.path.join(tempfile.gettempdir(), "iqsm_demo")
+_DEMO_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
 
 
 def _download_demo() -> tuple[str, str]:
