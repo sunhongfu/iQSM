@@ -16,6 +16,7 @@ import argparse
 import os
 import tempfile
 import traceback
+import urllib.request
 
 import gradio as gr
 import nibabel as nib
@@ -23,6 +24,82 @@ import numpy as np
 
 from inference import run_iqsm
 
+
+# ---------------------------------------------------------------------------
+# Demo data – single-echo in-vivo brain, 1×1×1 mm, B0=3T, TE=20ms
+# Hosted as GitHub Release assets so they work in Docker and bare Python.
+# ---------------------------------------------------------------------------
+_DEMO_BASE = (
+    "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
+)
+_DEMO_PHASE = f"{_DEMO_BASE}/ph_single_echo.nii.gz"
+_DEMO_MASK  = f"{_DEMO_BASE}/mask_single_echo.nii.gz"
+_DEMO_CACHE_DIR = os.path.join(tempfile.gettempdir(), "iqsm_demo")
+
+
+def _download_demo() -> tuple[str, str]:
+    """Download demo files (cached after first run). Returns (phase_path, mask_path)."""
+    os.makedirs(_DEMO_CACHE_DIR, exist_ok=True)
+    phase_path = os.path.join(_DEMO_CACHE_DIR, "ph_single_echo.nii.gz")
+    mask_path  = os.path.join(_DEMO_CACHE_DIR, "mask_single_echo.nii.gz")
+
+    for url, path in [(_DEMO_PHASE, phase_path), (_DEMO_MASK, mask_path)]:
+        if not os.path.exists(path):
+            print(f"Downloading demo file: {url}")
+            try:
+                urllib.request.urlretrieve(url, path)
+            except Exception as exc:
+                raise gr.Error(
+                    f"Could not download demo data from GitHub Releases.\n{exc}\n\n"
+                    "Please upload your own phase NIfTI file instead."
+                )
+    return phase_path, mask_path
+
+
+def load_and_run_demo(progress=gr.Progress(track_tqdm=True)):
+    """Download demo data, pre-fill parameters, and run reconstruction."""
+    def _progress(frac, msg):
+        progress(frac, desc=msg)
+
+    _progress(0.0, "Downloading demo data …")
+    try:
+        phase_path, mask_path = _download_demo()
+    except gr.Error:
+        raise
+    except Exception as exc:
+        raise gr.Error(str(exc))
+
+    # Demo parameters: single-echo, 1mm isotropic, B0=3T, TE=20ms
+    output_dir = tempfile.mkdtemp(prefix="iqsm_demo_")
+    try:
+        qsm_path, lfs_path = run_iqsm(
+            phase_nii_path=phase_path,
+            te=0.020,
+            mask_nii_path=mask_path,
+            voxel_size=[1, 1, 1],
+            b0=3.0,
+            eroded_rad=3,
+            phase_sign=-1,
+            output_dir=output_dir,
+            progress_fn=_progress,
+        )
+    except Exception:
+        raise gr.Error(
+            "Demo reconstruction failed.\n\n" + traceback.format_exc()
+        )
+
+    try:
+        ax_img, cor_img, sag_img = _make_slice_figure(qsm_path)
+    except Exception:
+        ax_img = cor_img = sag_img = None
+
+    status = "✅ Demo complete! Download QSM and LFS NIfTI files below."
+    return status, qsm_path, lfs_path, ax_img, cor_img, sag_img
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _parse_floats(text: str, name: str, n: int | None = None) -> list[float]:
     try:
@@ -64,6 +141,10 @@ def _make_slice_figure(nii_path: str):
 
     return imgs[0], imgs[1], imgs[2]
 
+
+# ---------------------------------------------------------------------------
+# Core reconstruction callback
+# ---------------------------------------------------------------------------
 
 def reconstruct(
     phase_file,
@@ -124,16 +205,17 @@ def reconstruct(
     return status, qsm_path, lfs_path, ax_img, cor_img, sag_img
 
 
+# ---------------------------------------------------------------------------
+# Gradio UI
+# ---------------------------------------------------------------------------
+
 TITLE = "iQSM – QSM Reconstruction"
 DESCRIPTION = """
 **Quantitative Susceptibility Mapping (QSM)** from MRI phase data
 using the *iQSM* deep learning model ([paper](https://doi.org/10.1002/mrm.28578)).
 
-**Quick-start:**
-1. Upload your wrapped phase NIfTI file.
-2. Enter the echo time in **seconds** (e.g. `0.020`).
-3. Adjust parameters as needed and click **Run Reconstruction**.
-4. Download the QSM (susceptibility) and LFS (tissue field) results.
+**Quick-start:** Upload your phase NIfTI, enter TE in seconds, and click **Run Reconstruction**.
+Or click **Run demo** to instantly try the app on a built-in single-echo brain dataset.
 """
 
 
@@ -142,6 +224,7 @@ def build_ui():
         gr.Markdown(f"# {TITLE}")
         gr.Markdown(DESCRIPTION)
 
+        # shared outputs (referenced by both buttons)
         with gr.Row():
             with gr.Column(scale=1):
                 gr.Markdown("### Input")
@@ -189,7 +272,14 @@ def build_ui():
                     placeholder="e.g.  1 1 2",
                 )
 
-                run_btn = gr.Button("▶ Run Reconstruction", variant="primary", size="lg")
+                with gr.Row():
+                    run_btn  = gr.Button("▶ Run Reconstruction", variant="primary", size="lg")
+                    demo_btn = gr.Button("⚡ Run demo", variant="secondary", size="lg")
+
+                gr.Markdown(
+                    "<small>**Demo:** single-echo in-vivo brain, 1×1×1 mm, TE=20 ms, B0=3T. "
+                    "Downloaded automatically from GitHub Releases (~1 MB).</small>"
+                )
 
             with gr.Column(scale=1):
                 gr.Markdown("### Results")
@@ -208,10 +298,18 @@ def build_ui():
                     coronal_img  = gr.Image(label="Coronal",  show_label=True)
                     sagittal_img = gr.Image(label="Sagittal", show_label=True)
 
+        _outputs = [status_box, qsm_file, lfs_file, axial_img, coronal_img, sagittal_img]
+
         run_btn.click(
             fn=reconstruct,
             inputs=[phase_file, te_str, mask_file, voxel_str, b0_val, eroded_rad, negate_phase],
-            outputs=[status_box, qsm_file, lfs_file, axial_img, coronal_img, sagittal_img],
+            outputs=_outputs,
+        )
+
+        demo_btn.click(
+            fn=load_and_run_demo,
+            inputs=[],
+            outputs=_outputs,
         )
 
         gr.Markdown(
