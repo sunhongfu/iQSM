@@ -1,0 +1,185 @@
+"""
+Pure Python inference pipeline for iQSM / iQFM.
+
+Reconstructs QSM (chi) and tissue field (lfs) from raw MRI phase without MATLAB.
+"""
+
+import os
+import sys
+import tempfile
+
+import numpy as np
+import nibabel as nib
+import torch
+import torch.nn as nn
+from scipy.ndimage import zoom, binary_erosion
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_EVAL_DIR = os.path.join(_HERE, "PythonCodes", "Evaluation")
+CHECKPOINTS_DIR = os.path.join(_HERE, "iQSM_fcns")
+
+if _EVAL_DIR not in sys.path:
+    sys.path.insert(0, _EVAL_DIR)
+
+from LoT_Unet import LoT_Unet, LoTLayer  # noqa: E402
+from Unet import Unet  # noqa: E402
+
+_CONV_OP = np.array(
+    [
+        [[1/13, 3/26, 1/13], [3/26, 3/13, 3/26], [1/13, 3/26, 1/13]],
+        [[3/26, 3/13, 3/26], [3/13, -44/13, 3/13], [3/26, 3/13, 3/26]],
+        [[1/13, 3/26, 1/13], [3/26, 3/13, 3/26], [1/13, 3/26, 1/13]],
+    ],
+    dtype=np.float32,
+)
+
+_model_cache: dict = {}
+
+
+def get_models(device: torch.device):
+    """Load (or return cached) iQSM and iQFM models."""
+    key = str(device)
+    if key in _model_cache:
+        return _model_cache[key]
+
+    conv_op = torch.from_numpy(_CONV_OP).unsqueeze(0).unsqueeze(0)
+    lot_layer = LoTLayer(conv_op)
+
+    unet_chi = Unet(4, 1, 1)
+    unet_chi = nn.DataParallel(unet_chi)
+    unet_chi.load_state_dict(torch.load(os.path.join(CHECKPOINTS_DIR, "iQSM_UnetPart.pth"), map_location=device))
+    unet_chi = unet_chi.module
+
+    unet_lfs = Unet(4, 1, 1)
+    unet_lfs = nn.DataParallel(unet_lfs)
+    unet_lfs.load_state_dict(torch.load(os.path.join(CHECKPOINTS_DIR, "iQFM_UnetPart.pth"), map_location=device))
+    unet_lfs = unet_lfs.module
+
+    iqsm = LoT_Unet(lot_layer, unet_chi).to(device).eval()
+    iqfm = LoT_Unet(LoTLayer(conv_op), unet_lfs).to(device).eval()
+
+    _model_cache[key] = (iqsm, iqfm)
+    return iqsm, iqfm
+
+
+def _make_sphere(radius):
+    c = np.arange(-radius, radius + 1)
+    x, y, z = np.meshgrid(c, c, c, indexing='ij')
+    return (x**2 + y**2 + z**2) <= radius**2
+
+
+def _zero_pad(arr, multiple=16):
+    pad_spec, positions = [], []
+    for s in arr.shape[:3]:
+        total = (multiple - s % multiple) % multiple
+        before = total // 2
+        pad_spec.append((before, total - before))
+        positions.append((before, before + s))
+    if arr.ndim == 4:
+        pad_spec.append((0, 0))
+    return np.pad(arr, pad_spec), positions
+
+
+def _zero_remove(arr, positions):
+    (x1, x2), (y1, y2), (z1, z2) = positions
+    return arr[x1:x2, y1:y2, z1:z2]
+
+
+def run_iqsm(
+    phase_nii_path: str,
+    te: float,
+    *,
+    mag_nii_path: str | None = None,
+    mask_nii_path: str | None = None,
+    voxel_size: list | None = None,
+    b0: float = 3.0,
+    eroded_rad: int = 3,
+    phase_sign: int = -1,
+    output_dir: str | None = None,
+    progress_fn=None,
+) -> tuple[str, str]:
+    """
+    Run iQSM + iQFM reconstruction in pure Python.
+
+    Parameters
+    ----------
+    phase_nii_path : str  – wrapped phase NIfTI (3D single-echo)
+    te : float            – echo time in seconds
+    mag_nii_path : str    – magnitude NIfTI (optional)
+    mask_nii_path : str   – brain mask NIfTI (optional)
+    voxel_size : list     – [x,y,z] mm override (reads from header if None)
+    b0 : float            – field strength in Tesla (default 3.0)
+    eroded_rad : int      – mask erosion radius in voxels (default 3)
+    phase_sign : int      – +1 or -1 sign convention flip (default -1)
+    output_dir : str      – output directory (temp dir if None)
+
+    Returns
+    -------
+    (qsm_path, lfs_path) – paths to QSM and tissue field NIfTI files
+    """
+    def _log(frac, msg):
+        print(f"[{frac:.0%}] {msg}")
+        if progress_fn:
+            progress_fn(frac, msg)
+
+    if output_dir is None:
+        output_dir = tempfile.mkdtemp(prefix="iqsm_")
+    os.makedirs(output_dir, exist_ok=True)
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    _log(0.0, f"Device: {device}")
+
+    _log(0.05, "Loading phase …")
+    phase_img = nib.load(phase_nii_path)
+    phase = phase_img.get_fdata(dtype=np.float32)
+    affine = phase_img.affine
+
+    if voxel_size is not None:
+        vox = np.array(voxel_size, dtype=np.float64)
+    else:
+        vox = np.array(phase_img.header.get_zooms()[:3], dtype=np.float64)
+
+    phase = float(phase_sign) * phase.astype(np.float32)
+
+    if mask_nii_path is not None:
+        _log(0.10, "Loading mask …")
+        mask = nib.load(mask_nii_path).get_fdata(dtype=np.float32)
+    else:
+        mask = np.ones(phase.shape[:3], dtype=np.float32)
+        eroded_rad = 0
+
+    if eroded_rad > 0:
+        _log(0.15, f"Eroding mask (radius={eroded_rad}) …")
+        mask = binary_erosion(mask > 0.5, structure=_make_sphere(eroded_rad)).astype(np.float32)
+
+    phase_pad, positions = _zero_pad(phase)
+    mask_pad, _ = _zero_pad(mask)
+
+    _log(0.25, "Loading models …")
+    iqsm, iqfm = get_models(device)
+
+    te_t = torch.tensor([te], dtype=torch.float32).to(device)
+    b0_t = torch.tensor([b0], dtype=torch.float32).to(device)
+    phase_t = torch.from_numpy(phase_pad).float().unsqueeze(0).unsqueeze(0).to(device)
+    mask_t  = torch.from_numpy(mask_pad).float().unsqueeze(0).unsqueeze(0).to(device)
+
+    _log(0.35, "Running iQSM …")
+    with torch.inference_mode():
+        pred_chi = iqsm(phase_t, mask_t, te_t, b0_t) * mask_t
+        _log(0.65, "Running iQFM …")
+        pred_lfs = iqfm(phase_t, mask_t, te_t, b0_t) * mask_t
+
+    def _to_numpy(t):
+        return t.squeeze().cpu().numpy().astype(np.float32)
+
+    chi = _zero_remove(_to_numpy(pred_chi), positions)
+    lfs = _zero_remove(_to_numpy(pred_lfs), positions)
+
+    _log(0.90, "Saving …")
+    qsm_path = os.path.join(output_dir, "iQSM.nii.gz")
+    lfs_path = os.path.join(output_dir, "iQFM.nii.gz")
+    nib.save(nib.Nifti1Image(chi, affine), qsm_path)
+    nib.save(nib.Nifti1Image(lfs, affine), lfs_path)
+
+    _log(1.0, f"Done! Saved to {output_dir}")
+    return qsm_path, lfs_path
