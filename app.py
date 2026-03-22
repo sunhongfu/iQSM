@@ -129,39 +129,42 @@ def _parse_floats(text: str, name: str, n: int | None = None) -> list[float]:
     return vals
 
 
-_DISPLAY_VMIN = -0.2   # ppm
+_DISPLAY_VMIN = -0.2   # ppm  (QSM)
 _DISPLAY_VMAX =  0.2   # ppm
+_LFS_VMIN     = -0.05  # ppm  (LFS tissue field)
+_LFS_VMAX     =  0.05  # ppm
 
 
-def _make_slice_figure(nii_path: str):
+def _make_slice_figure(nii_path: str, vmin: float, vmax: float):
+    """Render axial/coronal/sagittal middle slices; return PNG file paths."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     vol = nib.load(nii_path).get_fdata(dtype=np.float32)
-    vol_n = np.clip((vol - _DISPLAY_VMIN) / (_DISPLAY_VMAX - _DISPLAY_VMIN), 0, 1)
 
     raw_slices = [
-        vol_n[:, :, vol_n.shape[2] // 2].T,
-        vol_n[:, vol_n.shape[1] // 2, :].T,
-        vol_n[vol_n.shape[0] // 2, :, :].T,
+        vol[:, :, vol.shape[2] // 2].T,
+        vol[:, vol.shape[1] // 2, :].T,
+        vol[vol.shape[0] // 2, :, :].T,
     ]
 
-    imgs = []
-    for sl in raw_slices:
-        fig, ax = plt.subplots(figsize=(3.5, 3.5), dpi=110)
-        ax.imshow(sl, cmap="gray", origin="lower", aspect="equal", vmin=0, vmax=1)
+    out_dir = tempfile.mkdtemp(prefix="iqsm_preview_")
+    paths = []
+    for i, sl in enumerate(raw_slices):
+        fig, ax = plt.subplots(figsize=(4, 4), dpi=120)
+        ax.imshow(sl, cmap="gray", origin="lower", aspect="equal", vmin=vmin, vmax=vmax)
         ax.axis("off")
         fig.patch.set_facecolor("#111827")
         ax.set_facecolor("#111827")
-        fig.tight_layout(pad=0)
-        fig.canvas.draw()
-        w, h = fig.canvas.get_width_height()
-        buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
-        imgs.append(buf[:, :, :3].copy())
+        plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        path = os.path.join(out_dir, f"slice_{i}.png")
+        fig.savefig(path, dpi=120, bbox_inches="tight", pad_inches=0,
+                    facecolor="#111827")
         plt.close(fig)
+        paths.append(path)
 
-    return imgs[0], imgs[1], imgs[2]
+    return paths[0], paths[1], paths[2]
 
 
 # ---------------------------------------------------------------------------
@@ -219,12 +222,17 @@ def reconstruct(
         )
 
     try:
-        ax_img, cor_img, sag_img = _make_slice_figure(qsm_path)
+        ax_qsm, cor_qsm, sag_qsm = _make_slice_figure(qsm_path, _DISPLAY_VMIN, _DISPLAY_VMAX)
     except Exception:
-        ax_img = cor_img = sag_img = None
+        ax_qsm = cor_qsm = sag_qsm = None
+
+    try:
+        ax_lfs, cor_lfs, sag_lfs = _make_slice_figure(lfs_path, _LFS_VMIN, _LFS_VMAX)
+    except Exception:
+        ax_lfs = cor_lfs = sag_lfs = None
 
     status = "✅ Done — download QSM and LFS files below."
-    return status, qsm_path, lfs_path, ax_img, cor_img, sag_img
+    return status, qsm_path, lfs_path, ax_qsm, cor_qsm, sag_qsm, ax_lfs, cor_lfs, sag_lfs
 
 
 # ---------------------------------------------------------------------------
@@ -372,25 +380,24 @@ def build_ui():
                          "(veins appear bright in the QSM output).",
                 )
 
-                with gr.Accordion("Advanced options", open=False):
-                    mask_file = gr.File(
-                        label="Brain mask NIfTI (optional — full volume used if omitted)",
-                        file_types=[".nii", ".gz"],
+                mask_file = gr.File(
+                    label="Brain mask NIfTI (optional — full volume used if omitted)",
+                    file_types=[".nii", ".gz"],
+                )
+                with gr.Row():
+                    b0_val = gr.Number(
+                        label="B0 field strength (Tesla)",
+                        value=3.0, minimum=0.1, maximum=14.0, step=0.5,
                     )
-                    with gr.Row():
-                        b0_val = gr.Number(
-                            label="B0 field strength (Tesla)",
-                            value=3.0, minimum=0.1, maximum=14.0, step=0.5,
-                        )
-                        eroded_rad = gr.Slider(
-                            label="Mask erosion (voxels)",
-                            minimum=0, maximum=10, step=1, value=3,
-                        )
-                    voxel_str = gr.Textbox(
-                        label="Voxel size — x y z (mm)",
-                        placeholder="e.g.  1 1 2",
-                        info="Auto-filled from NIfTI header. Override if the values look wrong.",
+                    eroded_rad = gr.Slider(
+                        label="Mask erosion (voxels)",
+                        minimum=0, maximum=10, step=1, value=3,
                     )
+                voxel_str = gr.Textbox(
+                    label="Voxel size — x y z (mm)",
+                    placeholder="e.g.  1 1 2",
+                    info="Auto-filled from NIfTI header. Override if the values look wrong.",
+                )
 
                 with gr.Row():
                     run_btn  = gr.Button(
@@ -422,11 +429,17 @@ def build_ui():
                     qsm_file = gr.File(label="QSM — susceptibility map (.nii.gz)")
                     lfs_file = gr.File(label="LFS — tissue field (.nii.gz)")
 
-                gr.HTML('<p class="sec-label" style="margin-top:14px">Preview — QSM middle slices</p>')
-                with gr.Row(elem_id="preview-row"):
-                    axial_img    = gr.Image(label="Axial",    show_label=True, height=210)
-                    coronal_img  = gr.Image(label="Coronal",  show_label=True, height=210)
-                    sagittal_img = gr.Image(label="Sagittal", show_label=True, height=210)
+                gr.HTML('<p class="sec-label" style="margin-top:14px">Preview — QSM (−0.2 to 0.2 ppm)</p>')
+                with gr.Row():
+                    axial_img    = gr.Image(label="Axial",    show_label=True, height=200)
+                    coronal_img  = gr.Image(label="Coronal",  show_label=True, height=200)
+                    sagittal_img = gr.Image(label="Sagittal", show_label=True, height=200)
+
+                gr.HTML('<p class="sec-label" style="margin-top:10px">Preview — LFS tissue field (−0.05 to 0.05 ppm)</p>')
+                with gr.Row():
+                    axial_lfs    = gr.Image(label="Axial",    show_label=True, height=200)
+                    coronal_lfs  = gr.Image(label="Coronal",  show_label=True, height=200)
+                    sagittal_lfs = gr.Image(label="Sagittal", show_label=True, height=200)
 
         # ── Footer ──────────────────────────────────────────────────────
         gr.HTML("""
@@ -446,7 +459,9 @@ def build_ui():
             outputs=[te_str, voxel_str, b0_val],
         )
 
-        _run_outputs  = [status_box, qsm_file, lfs_file, axial_img, coronal_img, sagittal_img]
+        _run_outputs  = [status_box, qsm_file, lfs_file,
+                         axial_img, coronal_img, sagittal_img,
+                         axial_lfs, coronal_lfs, sagittal_lfs]
         _demo_outputs = [
             phase_file, mask_file, te_str, voxel_str, b0_val, eroded_rad, negate_phase,
             demo_info_box,
