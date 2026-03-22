@@ -335,6 +335,9 @@ _CSS = """
 }
 .app-footer a { color: #64748b !important; text-decoration: none; }
 .app-footer a:hover { text-decoration: underline !important; }
+
+/* ── Hide Gradio share button ─────────────────────────────────── */
+.share-button { display: none !important; }
 """
 
 _THEME = gr.themes.Default(
@@ -437,15 +440,15 @@ def build_ui():
 
                 gr.HTML('<p class="sec-label" style="margin-top:14px">Preview — QSM (−0.2 to 0.2 ppm)</p>')
                 with gr.Row():
-                    axial_img    = gr.Image(label="Axial",    show_label=True, height=200)
-                    coronal_img  = gr.Image(label="Coronal",  show_label=True, height=200)
-                    sagittal_img = gr.Image(label="Sagittal", show_label=True, height=200)
+                    axial_img    = gr.Image(label="Axial",    show_label=True, height=200, type="filepath")
+                    coronal_img  = gr.Image(label="Coronal",  show_label=True, height=200, type="filepath")
+                    sagittal_img = gr.Image(label="Sagittal", show_label=True, height=200, type="filepath")
 
                 gr.HTML('<p class="sec-label" style="margin-top:10px">Preview — LFS tissue field (−0.05 to 0.05 ppm)</p>')
                 with gr.Row():
-                    axial_lfs    = gr.Image(label="Axial",    show_label=True, height=200)
-                    coronal_lfs  = gr.Image(label="Coronal",  show_label=True, height=200)
-                    sagittal_lfs = gr.Image(label="Sagittal", show_label=True, height=200)
+                    axial_lfs    = gr.Image(label="Axial",    show_label=True, height=200, type="filepath")
+                    coronal_lfs  = gr.Image(label="Coronal",  show_label=True, height=200, type="filepath")
+                    sagittal_lfs = gr.Image(label="Sagittal", show_label=True, height=200, type="filepath")
 
         # ── Footer ──────────────────────────────────────────────────────
         gr.HTML("""
