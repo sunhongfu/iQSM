@@ -26,41 +26,50 @@ from inference import run_iqsm
 # ---------------------------------------------------------------------------
 # Demo data – single-echo in-vivo brain, 1×1×1 mm, B0=3T, TE=20ms
 # ---------------------------------------------------------------------------
+_HF_REPO  = "sunhongfu/iQSM"
 _HERE     = os.path.dirname(os.path.abspath(__file__))
 _DEMO_DIR = os.path.join(_HERE, "demo")
 
-_DEMO_NOT_FOUND_MSG = (
-    "Demo data not found in demo/.\n\n"
-    "Run the following command first, then restart the app:\n\n"
-    "    python run.py --download-demo\n\n"
-    "Or with Docker:\n\n"
-    "    docker compose run --rm iqsm python run.py --download-demo"
-)
+_DEMO_FILES = [
+    "ph_single_echo.nii.gz",
+    "mask_single_echo.nii.gz",
+    "params.json",
+]
+
+
+def _ensure_demo_files(progress_fn=None):
+    """Download any missing demo files from HF Hub into demo/."""
+    import shutil
+    from huggingface_hub import hf_hub_download
+    os.makedirs(_DEMO_DIR, exist_ok=True)
+    missing = [f for f in _DEMO_FILES
+               if not os.path.exists(os.path.join(_DEMO_DIR, f))]
+    for i, fname in enumerate(missing):
+        if progress_fn:
+            progress_fn((i / len(missing)) * 0.8,
+                        desc=f"Downloading {fname} …")
+        cached = hf_hub_download(repo_id=_HF_REPO, filename=f"demo/{fname}")
+        shutil.copy(cached, os.path.join(_DEMO_DIR, fname))
 
 
 def _load_demo_files() -> tuple[str, str, dict]:
-    """Load demo NIfTIs + params.json from local demo/ folder."""
+    """Return local paths to demo NIfTIs and parsed params."""
     import json
-    needed = ["ph_single_echo.nii.gz", "mask_single_echo.nii.gz", "params.json"]
-    missing = [f for f in needed if not os.path.exists(os.path.join(_DEMO_DIR, f))]
-    if missing:
-        raise gr.Error(_DEMO_NOT_FOUND_MSG)
-    phase_path  = os.path.join(_DEMO_DIR, "ph_single_echo.nii.gz")
-    mask_path   = os.path.join(_DEMO_DIR, "mask_single_echo.nii.gz")
+    phase_path = os.path.join(_DEMO_DIR, "ph_single_echo.nii.gz")
+    mask_path  = os.path.join(_DEMO_DIR, "mask_single_echo.nii.gz")
     with open(os.path.join(_DEMO_DIR, "params.json")) as f:
         params = json.load(f)
     return phase_path, mask_path, params
 
 
 def load_demo_data(progress=gr.Progress(track_tqdm=True)):
-    """Load demo files and populate all input fields. Does not run reconstruction."""
-    progress(0.0, desc="Loading demo data …")
+    """Download demo files if needed, then populate all input fields."""
     try:
+        _ensure_demo_files(progress_fn=progress)
+        progress(0.85, desc="Loading demo data …")
         phase_path, mask_path, params = _load_demo_files()
-    except gr.Error:
-        raise
     except Exception as exc:
-        raise gr.Error(str(exc))
+        raise gr.Error(f"Failed to load demo data: {exc}")
 
     te       = params["TE_seconds"]
     te_str   = str(te) if isinstance(te, (int, float)) else ", ".join(f"{v:.4g}" for v in te)
