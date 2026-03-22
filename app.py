@@ -1,7 +1,5 @@
 """
 iQSM – Gradio Web Interface
-=====================================
-Clinician-friendly web UI for Quantitative Susceptibility Mapping (QSM).
 
 Launch:
     python app.py                   # CPU
@@ -29,23 +27,19 @@ from inference import run_iqsm
 # ---------------------------------------------------------------------------
 # Demo data – single-echo in-vivo brain, 1×1×1 mm, B0=3T, TE=20ms
 # ---------------------------------------------------------------------------
-_DEMO_BASE = (
-    "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
-)
+_DEMO_BASE = "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
 _DEMO_PHASE = f"{_DEMO_BASE}/ph_single_echo.nii.gz"
 _DEMO_MASK  = f"{_DEMO_BASE}/mask_single_echo.nii.gz"
 _DEMO_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
 
-# Demo acquisition parameters
-_DEMO_TE         = 0.020   # seconds
-_DEMO_B0         = 3.0     # Tesla
-_DEMO_VOX        = "1 1 1" # mm
+_DEMO_TE         = 0.020
+_DEMO_B0         = 3.0
+_DEMO_VOX        = "1 1 1"
 _DEMO_ERODED_RAD = 3
-_DEMO_PHASE_SIGN = True    # negate_phase checkbox (True = phase_sign +1)
+_DEMO_PHASE_SIGN = True   # negate_phase checkbox (True = phase_sign +1)
 
 
 def _download_demo() -> tuple[str, str]:
-    """Download demo files (cached after first run). Returns (phase_path, mask_path)."""
     os.makedirs(_DEMO_CACHE_DIR, exist_ok=True)
     phase_path = os.path.join(_DEMO_CACHE_DIR, "ph_single_echo.nii.gz")
     mask_path  = os.path.join(_DEMO_CACHE_DIR, "mask_single_echo.nii.gz")
@@ -64,7 +58,6 @@ def _download_demo() -> tuple[str, str]:
 
 
 def load_and_run_demo(progress=gr.Progress(track_tqdm=True)):
-    """Download demo data, fill all form fields, and run reconstruction."""
     def _progress(frac, msg):
         progress(frac, desc=msg)
 
@@ -98,25 +91,19 @@ def load_and_run_demo(progress=gr.Progress(track_tqdm=True)):
         ax_img = cor_img = sag_img = None
 
     demo_info = (
-        f"Demo data cached at: {_DEMO_CACHE_DIR}\n"
-        f"  Phase:  ph_single_echo.nii.gz\n"
-        f"  Mask:   mask_single_echo.nii.gz\n"
-        "Parameters: 1×1×1 mm, TE=20 ms, B0=3T"
+        f"Cached at: {_DEMO_CACHE_DIR}\n"
+        f"  ph_single_echo.nii.gz   (phase)\n"
+        f"  mask_single_echo.nii.gz (mask)\n"
+        f"Parameters: 1×1×1 mm · TE = 20 ms · B0 = 3 T"
     )
-    status = "✅ Demo complete! Download QSM and LFS NIfTI files below."
+    status = "✅ Demo complete — download QSM and LFS files below."
 
-    # Return: input field updates + output results
     return (
-        # --- input fields ---
-        phase_path,                         # phase_file
-        mask_path,                          # mask_file
-        str(_DEMO_TE),                      # te_str
-        _DEMO_VOX,                          # voxel_str
-        _DEMO_B0,                           # b0_val
-        _DEMO_ERODED_RAD,                   # eroded_rad
-        _DEMO_PHASE_SIGN,                   # negate_phase
-        gr.update(value=demo_info, visible=True),  # demo_info_box
-        # --- output results ---
+        phase_path, mask_path,
+        str(_DEMO_TE), _DEMO_VOX,
+        _DEMO_B0, _DEMO_ERODED_RAD,
+        _DEMO_PHASE_SIGN,
+        gr.update(value=demo_info, visible=True),
         status, qsm_path, lfs_path, ax_img, cor_img, sag_img,
     )
 
@@ -126,11 +113,6 @@ def load_and_run_demo(progress=gr.Progress(track_tqdm=True)):
 # ---------------------------------------------------------------------------
 
 def extract_nii_metadata(file_obj):
-    """
-    Called when a phase NIfTI is uploaded.
-    Returns updates for: te_str, voxel_str, b0_val
-    Auto-fills voxel size from the header; attempts to parse TE from descrip.
-    """
     if file_obj is None:
         return gr.update(), gr.update(), gr.update()
     try:
@@ -138,15 +120,12 @@ def extract_nii_metadata(file_obj):
         zooms = img.header.get_zooms()
         voxel_str = f"{zooms[0]:.4g} {zooms[1]:.4g} {zooms[2]:.4g}"
 
-        # Try to extract TE from the NIfTI descrip field (best-effort)
         te_update = gr.update()
         try:
             descrip = img.header.get("descrip", b"")
             if isinstance(descrip, (bytes, bytearray)):
                 descrip = descrip.decode("utf-8", errors="ignore")
-            descrip = descrip.strip()
-            # Match "TE=20", "TE=0.020", "TE=20ms", "TE=20 ms" (case-insensitive)
-            m = re.search(r"TE\s*=\s*([\d.]+)\s*(ms)?", descrip, re.IGNORECASE)
+            m = re.search(r"TE\s*=\s*([\d.]+)\s*(ms)?", descrip.strip(), re.IGNORECASE)
             if m:
                 te_val = float(m.group(1))
                 if m.group(2) and m.group(2).lower() == "ms":
@@ -191,11 +170,14 @@ def _make_slice_figure(nii_path: str):
 
     imgs = []
     for title, sl in slices.items():
-        fig, ax = plt.subplots(figsize=(4, 4), dpi=100)
+        fig, ax = plt.subplots(figsize=(3.5, 3.5), dpi=110)
         ax.imshow(sl, cmap="gray", origin="lower", aspect="equal")
-        ax.set_title(title, fontsize=12)
+        ax.set_title(title, fontsize=11, pad=6, color="#374151",
+                     fontfamily="DejaVu Sans")
         ax.axis("off")
-        fig.tight_layout(pad=0.5)
+        fig.patch.set_facecolor("#111827")
+        ax.set_facecolor("#111827")
+        fig.tight_layout(pad=0.4)
         fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
         buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
@@ -227,7 +209,7 @@ def reconstruct(
     te_vals = _parse_floats(te_str, "Echo time (TE)", n=1)
     te = te_vals[0]
     if te <= 0:
-        raise gr.Error("Echo time must be positive. Enter value in seconds (e.g. 0.020).")
+        raise gr.Error("Echo time must be positive (enter seconds, e.g. 0.020).")
 
     voxel_size = None
     if voxel_str.strip():
@@ -255,7 +237,7 @@ def reconstruct(
         )
     except Exception:
         raise gr.Error(
-            "Reconstruction failed. Check the log for details.\n\n"
+            "Reconstruction failed — check the log for details.\n\n"
             + traceback.format_exc()
         )
 
@@ -264,106 +246,224 @@ def reconstruct(
     except Exception:
         ax_img = cor_img = sag_img = None
 
-    status = "✅ Reconstruction complete! Download QSM and LFS NIfTI files below."
+    status = "✅ Done — download QSM and LFS files below."
     return status, qsm_path, lfs_path, ax_img, cor_img, sag_img
 
 
 # ---------------------------------------------------------------------------
-# Gradio UI
+# UI
 # ---------------------------------------------------------------------------
 
-TITLE = "iQSM – QSM Reconstruction"
-DESCRIPTION = """
-**Quantitative Susceptibility Mapping (QSM)** from MRI phase data
-using the *iQSM* deep learning model ([paper](https://doi.org/10.1002/mrm.28578)).
+_CSS = """
+/* ── Typography ──────────────────────────────────────────────── */
+.gradio-container {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
+                 Roboto, "Helvetica Neue", Arial, sans-serif !important;
+    max-width: 1280px !important;
+    margin: 0 auto !important;
+}
 
-**Quick-start:** Upload your phase NIfTI — voxel size is filled automatically.
-Enter TE in seconds and click **Run Reconstruction**.
-Or click **⚡ Run demo** to try it instantly on a built-in brain dataset.
+/* ── App header ──────────────────────────────────────────────── */
+.app-header {
+    background: linear-gradient(135deg, #0c2340 0%, #1a4f8a 55%, #2471b5 100%);
+    border-radius: 10px;
+    padding: 22px 28px;
+    margin-bottom: 4px;
+}
+.app-header h1 {
+    color: #ffffff !important;
+    font-size: 1.45rem !important;
+    font-weight: 700 !important;
+    margin: 0 0 5px 0 !important;
+    letter-spacing: -0.02em !important;
+    line-height: 1.2 !important;
+}
+.app-header p {
+    color: rgba(255,255,255,0.72) !important;
+    font-size: 0.875rem !important;
+    margin: 0 !important;
+    line-height: 1.55 !important;
+}
+.app-header a { color: #93c5fd !important; text-decoration: none; }
+.app-header a:hover { text-decoration: underline !important; }
+
+/* ── Section labels ──────────────────────────────────────────── */
+.sec-label {
+    font-size: 0.68rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    color: #64748b !important;
+    margin: 0 0 6px 0 !important;
+    padding-bottom: 6px !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    display: block !important;
+}
+
+/* ── Action buttons ──────────────────────────────────────────── */
+#run-btn > button {
+    font-size: 0.975rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.01em !important;
+    height: 52px !important;
+    border-radius: 8px !important;
+}
+#demo-btn > button {
+    height: 52px !important;
+    border-radius: 8px !important;
+    font-weight: 500 !important;
+}
+
+/* ── Demo info box ────────────────────────────────────────────── */
+#demo-info textarea {
+    background: #f0f9ff !important;
+    border-color: #bae6fd !important;
+    font-size: 0.82rem !important;
+    font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace !important;
+    color: #0c4a6e !important;
+}
+
+/* ── Status box ──────────────────────────────────────────────── */
+#status-box textarea {
+    font-size: 0.875rem !important;
+    color: #1e293b !important;
+}
+
+/* ── Preview images ──────────────────────────────────────────── */
+#preview-row .image-container { border-radius: 6px !important; overflow: hidden !important; }
+
+/* ── Footer ──────────────────────────────────────────────────── */
+.app-footer {
+    font-size: 0.775rem !important;
+    color: #94a3b8 !important;
+    text-align: center !important;
+    padding: 12px 0 2px 0 !important;
+    border-top: 1px solid #e2e8f0 !important;
+    margin-top: 4px !important;
+    line-height: 1.6 !important;
+}
+.app-footer a { color: #64748b !important; text-decoration: none; }
+.app-footer a:hover { text-decoration: underline !important; }
 """
+
+_THEME = gr.themes.Default(
+    font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
+    font_mono=["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+    primary_hue=gr.themes.colors.blue,
+    neutral_hue=gr.themes.colors.slate,
+    radius_size=gr.themes.sizes.md,
+)
+
+TITLE = "iQSM — Quantitative Susceptibility Mapping"
 
 
 def build_ui():
-    with gr.Blocks(title=TITLE) as demo:
-        gr.Markdown(f"# {TITLE}")
-        gr.Markdown(DESCRIPTION)
+    with gr.Blocks(title=TITLE, theme=_THEME, css=_CSS) as demo:
 
-        with gr.Row():
-            with gr.Column(scale=1):
-                gr.Markdown("### Input")
+        # ── Header ──────────────────────────────────────────────────────
+        gr.HTML("""
+        <div class="app-header">
+          <h1>iQSM &mdash; Quantitative Susceptibility Mapping</h1>
+          <p>
+            Deep learning QSM reconstruction from single-echo MRI phase
+            (<a href="https://doi.org/10.1002/mrm.28578">Sun et al., MRM 2021</a>).
+            Upload your phase NIfTI, verify parameters, and reconstruct.
+            New here? Click <strong style="color:#bfdbfe">⚡ Run Demo</strong> for an instant example.
+          </p>
+        </div>
+        """)
+
+        with gr.Row(equal_height=False):
+
+            # ── Left column: Inputs ──────────────────────────────────────
+            with gr.Column(scale=5, min_width=340):
+
+                gr.HTML('<p class="sec-label">Input</p>')
+
                 phase_file = gr.File(
                     label="Phase NIfTI (.nii / .nii.gz)",
                     file_types=[".nii", ".gz"],
                 )
-
-                gr.Markdown("### Echo time")
                 te_str = gr.Textbox(
-                    label="TE (seconds)",
-                    placeholder="e.g.  0.020   — auto-filled if found in NIfTI header",
+                    label="Echo time — TE (seconds)",
+                    placeholder="e.g.  0.020",
+                    info="Auto-filled from NIfTI header when available. Enter value in seconds.",
                 )
-
                 negate_phase = gr.Checkbox(
-                    label="Reverse phase sign (opposite scanner convention)",
+                    label="Reverse phase sign",
                     value=False,
+                    info="Enable if using the opposite scanner convention "
+                         "(veins appear bright in the QSM output).",
                 )
 
-                gr.Markdown("### Optional inputs")
-                mask_file = gr.File(
-                    label="Brain mask NIfTI (optional)",
-                    file_types=[".nii", ".gz"],
-                )
-
-                gr.Markdown("### Acquisition parameters")
-                with gr.Row():
-                    b0_val = gr.Number(
-                        label="B0 field strength (Tesla)",
-                        value=3.0,
-                        minimum=0.1,
-                        maximum=14.0,
-                        step=0.5,
+                with gr.Accordion("Advanced options", open=False):
+                    mask_file = gr.File(
+                        label="Brain mask NIfTI (optional — full volume used if omitted)",
+                        file_types=[".nii", ".gz"],
                     )
-                    eroded_rad = gr.Slider(
-                        label="Mask erosion radius (voxels)",
-                        minimum=0,
-                        maximum=10,
-                        step=1,
-                        value=3,
+                    with gr.Row():
+                        b0_val = gr.Number(
+                            label="B0 field strength (Tesla)",
+                            value=3.0, minimum=0.1, maximum=14.0, step=0.5,
+                        )
+                        eroded_rad = gr.Slider(
+                            label="Mask erosion (voxels)",
+                            minimum=0, maximum=10, step=1, value=3,
+                        )
+                    voxel_str = gr.Textbox(
+                        label="Voxel size — x y z (mm)",
+                        placeholder="e.g.  1 1 2",
+                        info="Auto-filled from NIfTI header. Override if the values look wrong.",
                     )
-
-                voxel_str = gr.Textbox(
-                    label="Voxel size (mm)  — auto-filled from NIfTI header",
-                    placeholder="e.g.  1 1 2",
-                )
 
                 with gr.Row():
-                    run_btn  = gr.Button("▶ Run Reconstruction", variant="primary", size="lg")
-                    demo_btn = gr.Button("⚡ Run demo", variant="secondary", size="lg")
+                    run_btn  = gr.Button(
+                        "▶  Run Reconstruction", variant="primary",
+                        size="lg", elem_id="run-btn", scale=3,
+                    )
+                    demo_btn = gr.Button(
+                        "⚡  Run Demo", variant="secondary",
+                        size="lg", elem_id="demo-btn", scale=1,
+                    )
 
                 demo_info_box = gr.Textbox(
-                    label="Demo data info",
-                    lines=4,
-                    interactive=False,
-                    visible=False,
+                    label="Demo dataset",
+                    lines=4, interactive=False, visible=False, elem_id="demo-info",
                 )
 
-            with gr.Column(scale=1):
-                gr.Markdown("### Results")
+            # ── Right column: Results ────────────────────────────────────
+            with gr.Column(scale=5, min_width=340):
+
+                gr.HTML('<p class="sec-label">Results</p>')
+
                 status_box = gr.Textbox(
                     label="Status",
-                    lines=2,
-                    interactive=False,
-                    placeholder="Reconstruction output will appear here …",
+                    lines=2, interactive=False,
+                    placeholder="Results will appear here after reconstruction …",
+                    elem_id="status-box",
                 )
-                qsm_file = gr.File(label="⬇ Download QSM NIfTI (susceptibility)")
-                lfs_file = gr.File(label="⬇ Download LFS NIfTI (tissue field)")
-
-                gr.Markdown("#### Preview (QSM, middle slice)")
                 with gr.Row():
-                    axial_img    = gr.Image(label="Axial",    show_label=True)
-                    coronal_img  = gr.Image(label="Coronal",  show_label=True)
-                    sagittal_img = gr.Image(label="Sagittal", show_label=True)
+                    qsm_file = gr.File(label="QSM — susceptibility map (.nii.gz)")
+                    lfs_file = gr.File(label="LFS — tissue field (.nii.gz)")
 
-        # Auto-fill voxel size (and TE if in header) when NIfTI is uploaded
+                gr.HTML('<p class="sec-label" style="margin-top:14px">Preview — QSM middle slices</p>')
+                with gr.Row(elem_id="preview-row"):
+                    axial_img    = gr.Image(label="Axial",    show_label=True, height=210)
+                    coronal_img  = gr.Image(label="Coronal",  show_label=True, height=210)
+                    sagittal_img = gr.Image(label="Sagittal", show_label=True, height=210)
+
+        # ── Footer ──────────────────────────────────────────────────────
+        gr.HTML("""
+        <div class="app-footer">
+          Sun H, et al. <em>Leveraging deep neural networks for quantitative susceptibility mapping
+          via residual learning and linear fitting.</em> Magn Reson Med, 2021.
+          <a href="https://doi.org/10.1002/mrm.28578">doi:10.1002/mrm.28578</a>
+          &nbsp;·&nbsp;
+          <a href="https://github.com/sunhongfu/iQSM">github.com/sunhongfu/iQSM</a>
+        </div>
+        """)
+
+        # ── Wiring ───────────────────────────────────────────────────────
         phase_file.change(
             fn=extract_nii_metadata,
             inputs=[phase_file],
@@ -381,19 +481,10 @@ def build_ui():
             inputs=[phase_file, te_str, mask_file, voxel_str, b0_val, eroded_rad, negate_phase],
             outputs=_run_outputs,
         )
-
         demo_btn.click(
             fn=load_and_run_demo,
             inputs=[],
             outputs=_demo_outputs,
-        )
-
-        gr.Markdown(
-            "---\n"
-            "**Citation:** Sun H, et al. *Leveraging deep neural networks for quantitative susceptibility mapping via "
-            "residual learning and linear fitting.* Magnetic Resonance in Medicine, 2021. "
-            "[doi:10.1002/mrm.28578](https://doi.org/10.1002/mrm.28578)\n\n"
-            "**Source code:** [github.com/sunhongfu/iQSM](https://github.com/sunhongfu/iQSM)"
         )
 
     return demo
@@ -401,14 +492,13 @@ def build_ui():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="iQSM Gradio server")
-    parser.add_argument("--share", action="store_true", help="Create public Gradio link")
+    parser.add_argument("--share",       action="store_true", help="Create public Gradio link")
     parser.add_argument("--server-port", type=int, default=7860)
     parser.add_argument("--server-name", type=str, default="0.0.0.0")
     args = parser.parse_args()
 
     demo = build_ui()
     demo.launch(
-        theme=gr.themes.Soft(),
         share=args.share,
         server_name=args.server_name,
         server_port=args.server_port,
