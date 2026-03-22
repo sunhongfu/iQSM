@@ -26,50 +26,59 @@ from inference import run_iqsm
 # ---------------------------------------------------------------------------
 # Demo data – single-echo in-vivo brain, 1×1×1 mm, B0=3T, TE=20ms
 # ---------------------------------------------------------------------------
-_HF_REPO         = "sunhongfu/iQSM"
-_DEMO_TE         = 0.020
-_DEMO_B0         = 3.0
-_DEMO_VOX        = "1 1 1"
-_DEMO_ERODED_RAD = 3
-_DEMO_PHASE_SIGN = True   # negate_phase checkbox (True = phase_sign +1)
+_HF_REPO = "sunhongfu/iQSM"
 
 
-def _download_demo() -> tuple[str, str]:
+def _load_demo_files() -> tuple[str, str, dict]:
+    """Download demo NIfTIs + params.json from HF Hub. Returns (phase, mask, params)."""
+    import json
     from huggingface_hub import hf_hub_download
     try:
-        phase_path = hf_hub_download(repo_id=_HF_REPO, filename="demo/ph_single_echo.nii.gz")
-        mask_path  = hf_hub_download(repo_id=_HF_REPO, filename="demo/mask_single_echo.nii.gz")
+        phase_path  = hf_hub_download(repo_id=_HF_REPO, filename="demo/ph_single_echo.nii.gz")
+        mask_path   = hf_hub_download(repo_id=_HF_REPO, filename="demo/mask_single_echo.nii.gz")
+        params_path = hf_hub_download(repo_id=_HF_REPO, filename="demo/params.json")
     except Exception as exc:
         raise gr.Error(
             f"Could not download demo data from Hugging Face.\n{exc}\n\n"
             "Please upload your own phase NIfTI file instead."
         )
-    return phase_path, mask_path
+    with open(params_path) as f:
+        params = json.load(f)
+    return phase_path, mask_path, params
 
 
 def load_demo_data(progress=gr.Progress(track_tqdm=True)):
     """Download demo files and populate all input fields. Does not run reconstruction."""
     progress(0.0, desc="Downloading demo data …")
     try:
-        phase_path, mask_path = _download_demo()
+        phase_path, mask_path, params = _load_demo_files()
     except gr.Error:
         raise
     except Exception as exc:
         raise gr.Error(str(exc))
 
+    te       = params["TE_seconds"]
+    te_str   = str(te) if isinstance(te, (int, float)) else ", ".join(f"{v:.4g}" for v in te)
+    vox      = params["voxel_size_mm"]
+    vox_str  = " ".join(f"{v:.4g}" for v in vox)
+    b0       = params["B0_Tesla"]
+    eroded   = params.get("eroded_rad", 3)
+    negate   = params["phase_sign_convention"] == 1
+    mat      = params.get("matrix_size", "")
+    mat_str  = "×".join(str(x) for x in mat) if mat else ""
+
     demo_info = (
         f"HF Hub: {_HF_REPO}\n"
         f"  demo/ph_single_echo.nii.gz   (phase)\n"
         f"  demo/mask_single_echo.nii.gz (mask)\n"
-        f"Parameters: 1×1×1 mm · TE = 20 ms · B0 = 3 T\n"
+        f"Matrix: {mat_str} · Voxel: {vox_str} mm · TE: {te_str} s · B0: {b0} T\n"
         f"Ready — click ▶ Run Reconstruction to proceed."
     )
 
     return (
         phase_path, mask_path,
-        str(_DEMO_TE), _DEMO_VOX,
-        _DEMO_B0, _DEMO_ERODED_RAD,
-        _DEMO_PHASE_SIGN,
+        te_str, vox_str,
+        b0, eroded, negate,
         gr.update(value=demo_info, visible=True),
     )
 

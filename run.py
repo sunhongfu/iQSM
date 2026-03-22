@@ -49,23 +49,38 @@ def _hf_pull(filenames: list[str]) -> dict[str, str]:
 
 
 def cmd_download_demo():
+    import json
     print(f"Fetching demo data from huggingface.co/{_HF_REPO} …")
-    paths = _hf_pull(_DEMO_FILES)
-    phase = paths["demo/ph_single_echo.nii.gz"]
-    mask  = paths["demo/mask_single_echo.nii.gz"]
+    paths = _hf_pull(_DEMO_FILES + ["demo/params.json"])
+    phase  = paths["demo/ph_single_echo.nii.gz"]
+    mask   = paths["demo/mask_single_echo.nii.gz"]
+    with open(paths["demo/params.json"]) as f:
+        p = json.load(f)
+    te     = p["TE_seconds"]
+    vox    = p["voxel_size_mm"]
+    b0     = p["B0_Tesla"]
+    sign   = p["phase_sign_convention"]
+    eroded = p.get("eroded_rad", 3)
+    mat    = "×".join(str(x) for x in p.get("matrix_size", []))
+    te_str  = str(te) if isinstance(te, (int, float)) else " ".join(f"{v:.4g}" for v in te)
+    vox_str = " ".join(str(v) for v in vox)
     print(f"""
-Demo dataset: single-echo in-vivo brain, 1×1×1 mm, TE=20 ms, B0=3T
+Demo dataset: {p.get("description", "")}
+  Matrix:  {mat}
+  Voxel:   {vox_str} mm
+  TE:      {te_str} s
+  B0:      {b0} T
 
 To run reconstruction on this data:
 
     python run.py \\
         --phase  {phase} \\
         --mask   {mask} \\
-        --te     0.020 \\
-        --b0     3.0 \\
-        --voxel-size 1 1 1 \\
-        --eroded-rad 3 \\
-        --phase-sign 1 \\
+        --te     {te_str} \\
+        --b0     {b0} \\
+        --voxel-size {vox_str} \\
+        --eroded-rad {eroded} \\
+        --phase-sign {sign} \\
         --output ./iqsm_demo_output/
 
 Or copy config.yaml, fill in the paths above, and run:

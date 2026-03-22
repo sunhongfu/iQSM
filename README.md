@@ -2,7 +2,7 @@
 
 **Instant Tissue Field and Magnetic Susceptibility Mapping from MRI Raw Phase using Laplacian Enabled Deep Neural Networks**
 
-[NeuroImage 2022](https://www.sciencedirect.com/science/article/pii/S1053811922005274) &nbsp;|&nbsp; [arXiv](https://arxiv.org/abs/2111.07665) &nbsp;|&nbsp; [data & checkpoints](https://www.dropbox.com/sh/9kmbytgf3jpj7bh/AACUZJ1KlJ1AFCPMIVyRFJi5a?dl=0) &nbsp;|&nbsp; [deepMRI collection](https://github.com/sunhongfu/deepMRI)
+[NeuroImage 2022](https://www.sciencedirect.com/science/article/pii/S1053811922005274) &nbsp;|&nbsp; [arXiv](https://arxiv.org/abs/2111.07665) &nbsp;|&nbsp; [HuggingFace](https://huggingface.co/sunhongfu/iQSM) &nbsp;|&nbsp; [deepMRI collection](https://github.com/sunhongfu/deepMRI)
 
 iQSM enables single-step (end-to-end) local field and QSM reconstruction directly from raw MRI phase images, using a large-stencil Laplacian preprocessed deep neural network (LoT-Unet) — no separate background field removal needed.
 
@@ -28,12 +28,33 @@ Fig. 2: Comparison of different QSM methods on three ICH patients. Red arrows in
 
 ---
 
+## Model Checkpoints and Demo Data
+
+Pre-trained model weights and demo datasets are hosted on **[Hugging Face Hub](https://huggingface.co/sunhongfu/iQSM)** (`sunhongfu/iQSM`).
+
+**Why Hugging Face?**
+- GitHub repositories are not designed for large binary files. Hugging Face Hub provides reliable, version-controlled hosting for ML model weights and large NIfTI volumes with no file-size limits.
+- The `huggingface_hub` library handles caching automatically: files are downloaded once and stored in `~/.cache/huggingface/hub/`, so subsequent runs load from disk instantly.
+
+**Auto-download behaviour:**
+- **Checkpoints** — downloaded automatically on first inference (via `run.py` or `app.py`). No manual step required.
+- **Demo data** — downloaded when you run `python run.py --download-demo` or click **⬇ Load Demo Data** in the web app.
+
+You can also pre-warm the cache manually:
+
+```bash
+python run.py --download-demo          # fetch demo NIfTIs + params.json
+python run.py --download-checkpoints   # fetch model weights
+```
+
+---
+
 ## Requirements
 
 - Python 3.7+, PyTorch 1.8+
-- NVIDIA GPU (CUDA 10.0+)
-- MATLAB R2017b+ (for MATLAB wrapper)
-- FSL (for BET brain mask extraction)
+- NVIDIA GPU (CUDA 10.0+) recommended; CPU also works
+- MATLAB R2017b+ (for MATLAB wrapper only — not needed for web app)
+- FSL (for BET brain mask extraction, optional)
 
 Tested on: CentOS 7.8 (Tesla V100), macOS 12 / Ubuntu 19.10 (GTX 1060).
 
@@ -41,7 +62,7 @@ Tested on: CentOS 7.8 (Tesla V100), macOS 12 / Ubuntu 19.10 (GTX 1060).
 
 ## Quick Start — Web App (no MATLAB needed)
 
-The easiest way to run iQSM. Pretrained checkpoints and demo data download automatically.
+The easiest way to run iQSM. Pretrained checkpoints and demo data download automatically on first use.
 
 ### Option A: Docker (recommended — zero setup)
 
@@ -52,7 +73,7 @@ docker compose up
 ```
 
 Open **http://localhost:7860** in your browser.
-Click **⚡ Run demo** to try it instantly, or upload your own phase NIfTI.
+Click **⬇ Load Demo Data** to fill in demo parameters, then **▶ Run Reconstruction** to process.
 
 > For NVIDIA GPU support, edit `docker-compose.yml` and set `TORCH_VARIANT=cu121`, then uncomment the GPU block.
 
@@ -84,21 +105,37 @@ python app.py
 
 Open **http://localhost:7860** in your browser.
 
-> **Checkpoints** (`iQSM_UnetPart.pth`, `iQFM_UnetPart.pth`) are downloaded automatically
-> into `iQSM_fcns/` on first run (~34 MB total). They are also available manually from
-> [Dropbox](https://www.dropbox.com/sh/9kmbytgf3jpj7bh/AACUZJ1KlJ1AFCPMIVyRFJi5a?dl=0).
+---
+
+## Quick Start — Command Line
+
+```bash
+# First time: download demo data and see how to run it
+python run.py --download-demo
+
+# Run reconstruction on your own data
+python run.py --phase ph.nii.gz --te 0.020 --mask mask.nii.gz
+
+# Use a config file
+python run.py --config config.yaml
+
+# All options
+python run.py --help
+```
+
+Checkpoints are downloaded automatically on first run and cached in `~/.cache/huggingface/hub/`.
 
 ---
 
 ## Quick Start — MATLAB Wrapper
 
-### 1. Clone and download checkpoints
+### 1. Clone and set up
 
 ```bash
 git clone https://github.com/sunhongfu/iQSM.git
 ```
 
-Download checkpoints and demo data from [Dropbox](https://www.dropbox.com/sh/9kmbytgf3jpj7bh/AACUZJ1KlJ1AFCPMIVyRFJi5a?dl=0) and place `.pth` files in `iQSM_fcns/`.
+Checkpoints are downloaded automatically on first inference. No manual download needed.
 
 ### 2. Run on demo data
 
@@ -136,11 +173,12 @@ QSM = iQSM(phase, TE, 'mag', mag, 'mask', mask, 'voxel_size', [1,1,1], 'B0', 3, 
 
 | File | Description |
 |------|-------------|
-| `demo_single_echo.m` | Full pipeline on single-echo simulated data |
-| `demo_multi_echo.m` | Full pipeline on multi-echo in vivo data |
-| `PythonCodes/Evaluation/Inference.py` | PyTorch inference API |
-| `PythonCodes/Evaluation/LoT_Unet.py` | LoT-Unet model |
-| `PythonCodes/Training/` | Training scripts for iQSM and iQFM |
+| `app.py` | Gradio web UI |
+| `run.py` | Command-line interface |
+| `inference.py` | PyTorch inference engine |
+| `demo_single_echo.m` | MATLAB demo: single-echo simulated data |
+| `demo_multi_echo.m` | MATLAB demo: multi-echo in vivo data |
+| `PythonCodes/` | Training scripts and model definitions |
 
 ---
 
