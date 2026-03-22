@@ -57,11 +57,9 @@ def _download_demo() -> tuple[str, str]:
     return phase_path, mask_path
 
 
-def load_and_run_demo(progress=gr.Progress(track_tqdm=True)):
-    def _progress(frac, msg):
-        progress(frac, desc=msg)
-
-    _progress(0.0, "Downloading demo data …")
+def load_demo_data(progress=gr.Progress(track_tqdm=True)):
+    """Download demo files and populate all input fields. Does not run reconstruction."""
+    progress(0.0, desc="Downloading demo data …")
     try:
         phase_path, mask_path = _download_demo()
     except gr.Error:
@@ -69,34 +67,13 @@ def load_and_run_demo(progress=gr.Progress(track_tqdm=True)):
     except Exception as exc:
         raise gr.Error(str(exc))
 
-    output_dir = tempfile.mkdtemp(prefix="iqsm_demo_")
-    try:
-        qsm_path, lfs_path = run_iqsm(
-            phase_nii_path=phase_path,
-            te=_DEMO_TE,
-            mask_nii_path=mask_path,
-            voxel_size=[1, 1, 1],
-            b0=_DEMO_B0,
-            eroded_rad=_DEMO_ERODED_RAD,
-            phase_sign=1 if _DEMO_PHASE_SIGN else -1,
-            output_dir=output_dir,
-            progress_fn=_progress,
-        )
-    except Exception:
-        raise gr.Error("Demo reconstruction failed.\n\n" + traceback.format_exc())
-
-    try:
-        ax_img, cor_img, sag_img = _make_slice_figure(qsm_path)
-    except Exception:
-        ax_img = cor_img = sag_img = None
-
     demo_info = (
         f"Cached at: {_DEMO_CACHE_DIR}\n"
         f"  ph_single_echo.nii.gz   (phase)\n"
         f"  mask_single_echo.nii.gz (mask)\n"
-        f"Parameters: 1×1×1 mm · TE = 20 ms · B0 = 3 T"
+        f"Parameters: 1×1×1 mm · TE = 20 ms · B0 = 3 T\n"
+        f"Ready — click ▶ Run Reconstruction to proceed."
     )
-    status = "✅ Demo complete — download QSM and LFS files below."
 
     return (
         phase_path, mask_path,
@@ -104,7 +81,6 @@ def load_and_run_demo(progress=gr.Progress(track_tqdm=True)):
         _DEMO_B0, _DEMO_ERODED_RAD,
         _DEMO_PHASE_SIGN,
         gr.update(value=demo_info, visible=True),
-        status, qsm_path, lfs_path, ax_img, cor_img, sag_img,
     )
 
 
@@ -153,31 +129,32 @@ def _parse_floats(text: str, name: str, n: int | None = None) -> list[float]:
     return vals
 
 
+_DISPLAY_VMIN = -0.2   # ppm
+_DISPLAY_VMAX =  0.2   # ppm
+
+
 def _make_slice_figure(nii_path: str):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     vol = nib.load(nii_path).get_fdata(dtype=np.float32)
-    vmin, vmax = np.percentile(vol, [2, 98])
-    vol_n = np.clip((vol - vmin) / max(vmax - vmin, 1e-6), 0, 1)
+    vol_n = np.clip((vol - _DISPLAY_VMIN) / (_DISPLAY_VMAX - _DISPLAY_VMIN), 0, 1)
 
-    slices = {
-        "Axial":    vol_n[:, :, vol_n.shape[2] // 2].T,
-        "Coronal":  vol_n[:, vol_n.shape[1] // 2, :].T,
-        "Sagittal": vol_n[vol_n.shape[0] // 2, :, :].T,
-    }
+    raw_slices = [
+        vol_n[:, :, vol_n.shape[2] // 2].T,
+        vol_n[:, vol_n.shape[1] // 2, :].T,
+        vol_n[vol_n.shape[0] // 2, :, :].T,
+    ]
 
     imgs = []
-    for title, sl in slices.items():
+    for sl in raw_slices:
         fig, ax = plt.subplots(figsize=(3.5, 3.5), dpi=110)
-        ax.imshow(sl, cmap="gray", origin="lower", aspect="equal")
-        ax.set_title(title, fontsize=11, pad=6, color="#374151",
-                     fontfamily="DejaVu Sans")
+        ax.imshow(sl, cmap="gray", origin="lower", aspect="equal", vmin=0, vmax=1)
         ax.axis("off")
         fig.patch.set_facecolor("#111827")
         ax.set_facecolor("#111827")
-        fig.tight_layout(pad=0.4)
+        fig.tight_layout(pad=0)
         fig.canvas.draw()
         w, h = fig.canvas.get_width_height()
         buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
@@ -367,7 +344,7 @@ def build_ui():
             Deep learning QSM reconstruction from single-echo MRI phase
             (<a href="https://doi.org/10.1002/mrm.28578">Sun et al., MRM 2021</a>).
             Upload your phase NIfTI, verify parameters, and reconstruct.
-            New here? Click <strong style="color:#bfdbfe">⚡ Run Demo</strong> for an instant example.
+            New here? Click <strong style="color:#bfdbfe">⬇ Load Demo Data</strong> to prefill all fields, then click Run.
           </p>
         </div>
         """)
@@ -421,7 +398,7 @@ def build_ui():
                         size="lg", elem_id="run-btn", scale=3,
                     )
                     demo_btn = gr.Button(
-                        "⚡  Run Demo", variant="secondary",
+                        "⬇  Load Demo Data", variant="secondary",
                         size="lg", elem_id="demo-btn", scale=1,
                     )
 
@@ -473,7 +450,7 @@ def build_ui():
         _demo_outputs = [
             phase_file, mask_file, te_str, voxel_str, b0_val, eroded_rad, negate_phase,
             demo_info_box,
-        ] + _run_outputs
+        ]
 
         run_btn.click(
             fn=reconstruct,
@@ -481,7 +458,7 @@ def build_ui():
             outputs=_run_outputs,
         )
         demo_btn.click(
-            fn=load_and_run_demo,
+            fn=load_demo_data,
             inputs=[],
             outputs=_demo_outputs,
         )
