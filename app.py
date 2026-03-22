@@ -15,7 +15,6 @@ import os
 import re
 import tempfile
 import traceback
-import urllib.request
 
 import gradio as gr
 import nibabel as nib
@@ -27,11 +26,7 @@ from inference import run_iqsm
 # ---------------------------------------------------------------------------
 # Demo data – single-echo in-vivo brain, 1×1×1 mm, B0=3T, TE=20ms
 # ---------------------------------------------------------------------------
-_DEMO_BASE = "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
-_DEMO_PHASE = f"{_DEMO_BASE}/ph_single_echo.nii.gz"
-_DEMO_MASK  = f"{_DEMO_BASE}/mask_single_echo.nii.gz"
-_DEMO_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo")
-
+_HF_REPO         = "sunhongfu/iQSM"
 _DEMO_TE         = 0.020
 _DEMO_B0         = 3.0
 _DEMO_VOX        = "1 1 1"
@@ -40,20 +35,15 @@ _DEMO_PHASE_SIGN = True   # negate_phase checkbox (True = phase_sign +1)
 
 
 def _download_demo() -> tuple[str, str]:
-    os.makedirs(_DEMO_CACHE_DIR, exist_ok=True)
-    phase_path = os.path.join(_DEMO_CACHE_DIR, "ph_single_echo.nii.gz")
-    mask_path  = os.path.join(_DEMO_CACHE_DIR, "mask_single_echo.nii.gz")
-
-    for url, path in [(_DEMO_PHASE, phase_path), (_DEMO_MASK, mask_path)]:
-        if not os.path.exists(path):
-            print(f"Downloading demo file: {url}")
-            try:
-                urllib.request.urlretrieve(url, path)
-            except Exception as exc:
-                raise gr.Error(
-                    f"Could not download demo data from GitHub Releases.\n{exc}\n\n"
-                    "Please upload your own phase NIfTI file instead."
-                )
+    from huggingface_hub import hf_hub_download
+    try:
+        phase_path = hf_hub_download(repo_id=_HF_REPO, filename="demo/ph_single_echo.nii.gz")
+        mask_path  = hf_hub_download(repo_id=_HF_REPO, filename="demo/mask_single_echo.nii.gz")
+    except Exception as exc:
+        raise gr.Error(
+            f"Could not download demo data from Hugging Face.\n{exc}\n\n"
+            "Please upload your own phase NIfTI file instead."
+        )
     return phase_path, mask_path
 
 
@@ -68,9 +58,9 @@ def load_demo_data(progress=gr.Progress(track_tqdm=True)):
         raise gr.Error(str(exc))
 
     demo_info = (
-        f"Cached at: {_DEMO_CACHE_DIR}\n"
-        f"  ph_single_echo.nii.gz   (phase)\n"
-        f"  mask_single_echo.nii.gz (mask)\n"
+        f"HF Hub: {_HF_REPO}\n"
+        f"  demo/ph_single_echo.nii.gz   (phase)\n"
+        f"  demo/mask_single_echo.nii.gz (mask)\n"
         f"Parameters: 1×1×1 mm · TE = 20 ms · B0 = 3 T\n"
         f"Ready — click ▶ Run Reconstruction to proceed."
     )

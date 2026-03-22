@@ -1,66 +1,58 @@
 """
 iQSM – Command-line interface
 
-Setup (first time):
-    python run.py --download-demo           # fetch demo NIfTIs  → demo/
-    python run.py --download-checkpoints    # fetch model weights → iQSM_fcns/
+Setup (first time — pre-warms the Hugging Face cache):
+    python run.py --download-demo           # fetch demo NIfTIs
+    python run.py --download-checkpoints    # fetch model weights
 
 Run:
     python run.py --config config.yaml
     python run.py --phase ph.nii.gz --te 0.020 --mask mask.nii.gz
     python run.py --config config.yaml --output ./other/   # CLI overrides config
     python run.py --help
+
+Files are cached automatically by huggingface_hub (~/.cache/huggingface/hub/).
 """
 
 import argparse
-import os
-import tempfile
-import urllib.request
 
 import yaml
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
+_HF_REPO = "sunhongfu/iQSM"
+
+_DEMO_FILES = [
+    "demo/ph_single_echo.nii.gz",
+    "demo/mask_single_echo.nii.gz",
+]
+_CKPT_FILES = [
+    "iQSM_50_v2.pth",
+    "LPLayer_chi_50_v2.pth",
+    "iQFM_40_v2.pth",
+    "LoTLayer_lfs_40_v2.pth",
+]
+
 
 # ---------------------------------------------------------------------------
 # Download helpers
 # ---------------------------------------------------------------------------
 
-_DEMO_DIR  = os.path.join(_HERE, "demo")
-_CKPT_DIR  = os.path.join(_HERE, "iQSM_fcns")
-
-_DEMO_BASE = "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
-_DEMO_FILES = {
-    "ph_single_echo.nii.gz":   f"{_DEMO_BASE}/ph_single_echo.nii.gz",
-    "mask_single_echo.nii.gz": f"{_DEMO_BASE}/mask_single_echo.nii.gz",
-}
-
-_CKPT_BASE = "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
-_CKPT_FILES = {
-    "iQSM_50_v2.pth":         f"{_CKPT_BASE}/iQSM_50_v2.pth",
-    "LPLayer_chi_50_v2.pth":  f"{_CKPT_BASE}/LPLayer_chi_50_v2.pth",
-    "iQFM_40_v2.pth":         f"{_CKPT_BASE}/iQFM_40_v2.pth",
-    "LoTLayer_lfs_40_v2.pth": f"{_CKPT_BASE}/LoTLayer_lfs_40_v2.pth",
-}
-
-
-def _download(files: dict, dest_dir: str):
-    os.makedirs(dest_dir, exist_ok=True)
-    for name, url in files.items():
-        dest = os.path.join(dest_dir, name)
-        if os.path.exists(dest):
-            print(f"  {name}  (already downloaded)")
-        else:
-            print(f"  {name}  downloading …", end=" ", flush=True)
-            urllib.request.urlretrieve(url, dest)
-            size = os.path.getsize(dest)
-            print(f"done ({size / 1024 / 1024:.1f} MB)")
+def _hf_pull(filenames: list[str]) -> dict[str, str]:
+    """Download files from HF Hub (cached after first run). Returns {filename: local_path}."""
+    from huggingface_hub import hf_hub_download
+    paths = {}
+    for filename in filenames:
+        print(f"  {filename} …", end=" ", flush=True)
+        path = hf_hub_download(repo_id=_HF_REPO, filename=filename)
+        print(f"ok  →  {path}")
+        paths[filename] = path
+    return paths
 
 
 def cmd_download_demo():
-    print(f"Downloading demo data → {_DEMO_DIR}/")
-    _download(_DEMO_FILES, _DEMO_DIR)
-    phase = os.path.join(_DEMO_DIR, "ph_single_echo.nii.gz")
-    mask  = os.path.join(_DEMO_DIR, "mask_single_echo.nii.gz")
+    print(f"Fetching demo data from huggingface.co/{_HF_REPO} …")
+    paths = _hf_pull(_DEMO_FILES)
+    phase = paths["demo/ph_single_echo.nii.gz"]
+    mask  = paths["demo/mask_single_echo.nii.gz"]
     print(f"""
 Demo dataset: single-echo in-vivo brain, 1×1×1 mm, TE=20 ms, B0=3T
 
@@ -83,9 +75,9 @@ Or copy config.yaml, fill in the paths above, and run:
 
 
 def cmd_download_checkpoints():
-    print(f"Downloading model checkpoints → {_CKPT_DIR}/")
-    _download(_CKPT_FILES, _CKPT_DIR)
-    print("\nCheckpoints ready. (Also downloaded automatically on first inference.)\n")
+    print(f"Fetching model checkpoints from huggingface.co/{_HF_REPO} …")
+    _hf_pull(_CKPT_FILES)
+    print("\nCheckpoints cached. (Also fetched automatically on first inference.)\n")
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +116,9 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--download-demo",        action="store_true",
-                        help="Download demo NIfTIs to demo/ and show how to run them.")
+                        help="Pre-warm HF cache with demo NIfTIs and show how to run them.")
     parser.add_argument("--download-checkpoints", action="store_true",
-                        help="Download model checkpoints to iQSM_fcns/.")
+                        help="Pre-warm HF cache with model checkpoints.")
     parser.add_argument("--config",     metavar="FILE",
                         help="YAML config file. CLI arguments override config values.")
     parser.add_argument("--phase",      metavar="FILE",
@@ -139,7 +131,7 @@ def main():
                         help="Output directory.")
     parser.add_argument("--b0",         type=float, default=3.0,
                         help="B0 field strength in Tesla.")
-    parser.add_argument("--voxel-size", nargs=3, type=float, metavar=("X","Y","Z"),
+    parser.add_argument("--voxel-size", nargs=3, type=float, metavar=("X", "Y", "Z"),
                         default=None,
                         help="Voxel size in mm. Reads from NIfTI header if omitted.")
     parser.add_argument("--eroded-rad", type=int, default=3, metavar="N",

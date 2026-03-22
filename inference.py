@@ -27,29 +27,15 @@ from Unet import Unet  # noqa: E402
 from Unet_blocks import LoTLayer  # noqa: E402  (learnable LoTLayer)
 
 # ---------------------------------------------------------------------------
-# Auto-download checkpoints from GitHub Releases if not present locally
+# Checkpoint download via Hugging Face Hub (cached automatically)
 # ---------------------------------------------------------------------------
-_CKPT_BASE = (
-    "https://github.com/sunhongfu/iQSM/releases/download/v1.0-demo"
-)
-_CHECKPOINTS = {
-    "iQSM_50_v2.pth":        f"{_CKPT_BASE}/iQSM_50_v2.pth",
-    "LPLayer_chi_50_v2.pth": f"{_CKPT_BASE}/LPLayer_chi_50_v2.pth",
-    "iQFM_40_v2.pth":        f"{_CKPT_BASE}/iQFM_40_v2.pth",
-    "LoTLayer_lfs_40_v2.pth":f"{_CKPT_BASE}/LoTLayer_lfs_40_v2.pth",
-}
+_HF_REPO = "sunhongfu/iQSM"
 
 
-def _ensure_checkpoints():
-    """Download missing checkpoint files from GitHub Releases."""
-    import urllib.request
-    os.makedirs(CHECKPOINTS_DIR, exist_ok=True)
-    for filename, url in _CHECKPOINTS.items():
-        dest = os.path.join(CHECKPOINTS_DIR, filename)
-        if not os.path.exists(dest):
-            print(f"Downloading checkpoint {filename} …")
-            urllib.request.urlretrieve(url, dest)
-            print(f"  Saved to {dest}")
+def _ckpt(filename: str) -> str:
+    """Return local path to a checkpoint, downloading from HF Hub if needed."""
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download(repo_id=_HF_REPO, filename=filename)
 
 
 _CONV_OP = np.array(
@@ -78,18 +64,16 @@ def get_models(device: torch.device):
     if key in _model_cache:
         return _model_cache[key]
 
-    ckpt = CHECKPOINTS_DIR
-
-    lot_chi = _load_lot_layer(os.path.join(ckpt, "LPLayer_chi_50_v2.pth"), device)
+    lot_chi = _load_lot_layer(_ckpt("LPLayer_chi_50_v2.pth"), device)
     unet_chi = Unet(4, 16, 1)
     unet_chi = nn.DataParallel(unet_chi)
-    unet_chi.load_state_dict(torch.load(os.path.join(ckpt, "iQSM_50_v2.pth"), map_location=device))
+    unet_chi.load_state_dict(torch.load(_ckpt("iQSM_50_v2.pth"), map_location=device))
     unet_chi = unet_chi.module
 
-    lot_lfs = _load_lot_layer(os.path.join(ckpt, "LoTLayer_lfs_40_v2.pth"), device)
+    lot_lfs = _load_lot_layer(_ckpt("LoTLayer_lfs_40_v2.pth"), device)
     unet_lfs = Unet(4, 16, 1)
     unet_lfs = nn.DataParallel(unet_lfs)
-    unet_lfs.load_state_dict(torch.load(os.path.join(ckpt, "iQFM_40_v2.pth"), map_location=device))
+    unet_lfs.load_state_dict(torch.load(_ckpt("iQFM_40_v2.pth"), map_location=device))
     unet_lfs = unet_lfs.module
 
     iqsm = LoT_Unet(lot_chi, unet_chi).to(device).eval()

@@ -2,6 +2,10 @@
 # Usage:
 #   docker compose build && docker compose up
 #   Open http://localhost:7860
+#
+# Model checkpoints and demo data are downloaded automatically from
+# Hugging Face Hub (huggingface.co/sunhongfu/iQSM) and cached in the
+# named volume 'hf-cache', which persists across container restarts.
 
 services:
   iqsm:
@@ -14,9 +18,7 @@ services:
       - "7860:7860"
     volumes:
       - ./outputs:/tmp/iqsm_outputs
-      - ./demo:/iQSM/demo               # demo NIfTIs — persists across restarts
-      - ./iQSM_fcns:/iQSM/iQSM_fcns    # model checkpoints — persists across restarts
-    restart: unless-stopped
+      - hf-cache:/root/.cache/huggingface   # checkpoints + demo data persist here
 
     # NVIDIA GPU – uncomment below for Linux + NVIDIA GPU, set TORCH_VARIANT=cu121
     # environment:
@@ -28,3 +30,6 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
+
+volumes:
+  hf-cache:
