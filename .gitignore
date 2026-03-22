@@ -1,4 +1,23 @@
+# Checkpoints (downloaded from HF Hub via: python run.py --download-checkpoints)
+*.pth
 
-# Downloaded demo data
-demo/
-iQSM_fcns/*.pth
+# Demo NIfTI files (downloaded from HF Hub via: python run.py --download-demo)
+demo/*.nii
+demo/*.nii.gz
+
+# Output files
+outputs/
+*.nii
+*.nii.gz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Environments
+.env
+*.egg-info/
+dist/
+build/

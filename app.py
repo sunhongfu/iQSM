@@ -26,30 +26,35 @@ from inference import run_iqsm
 # ---------------------------------------------------------------------------
 # Demo data – single-echo in-vivo brain, 1×1×1 mm, B0=3T, TE=20ms
 # ---------------------------------------------------------------------------
-_HF_REPO = "sunhongfu/iQSM"
+_HERE     = os.path.dirname(os.path.abspath(__file__))
+_DEMO_DIR = os.path.join(_HERE, "demo")
+
+_DEMO_NOT_FOUND_MSG = (
+    "Demo data not found in demo/.\n\n"
+    "Run the following command first, then restart the app:\n\n"
+    "    python run.py --download-demo\n\n"
+    "Or with Docker:\n\n"
+    "    docker compose run --rm iqsm python run.py --download-demo"
+)
 
 
 def _load_demo_files() -> tuple[str, str, dict]:
-    """Download demo NIfTIs + params.json from HF Hub. Returns (phase, mask, params)."""
+    """Load demo NIfTIs + params.json from local demo/ folder."""
     import json
-    from huggingface_hub import hf_hub_download
-    try:
-        phase_path  = hf_hub_download(repo_id=_HF_REPO, filename="demo/ph_single_echo.nii.gz")
-        mask_path   = hf_hub_download(repo_id=_HF_REPO, filename="demo/mask_single_echo.nii.gz")
-        params_path = hf_hub_download(repo_id=_HF_REPO, filename="demo/params.json")
-    except Exception as exc:
-        raise gr.Error(
-            f"Could not download demo data from Hugging Face.\n{exc}\n\n"
-            "Please upload your own phase NIfTI file instead."
-        )
-    with open(params_path) as f:
+    needed = ["ph_single_echo.nii.gz", "mask_single_echo.nii.gz", "params.json"]
+    missing = [f for f in needed if not os.path.exists(os.path.join(_DEMO_DIR, f))]
+    if missing:
+        raise gr.Error(_DEMO_NOT_FOUND_MSG)
+    phase_path  = os.path.join(_DEMO_DIR, "ph_single_echo.nii.gz")
+    mask_path   = os.path.join(_DEMO_DIR, "mask_single_echo.nii.gz")
+    with open(os.path.join(_DEMO_DIR, "params.json")) as f:
         params = json.load(f)
     return phase_path, mask_path, params
 
 
 def load_demo_data(progress=gr.Progress(track_tqdm=True)):
-    """Download demo files and populate all input fields. Does not run reconstruction."""
-    progress(0.0, desc="Downloading demo data …")
+    """Load demo files and populate all input fields. Does not run reconstruction."""
+    progress(0.0, desc="Loading demo data …")
     try:
         phase_path, mask_path, params = _load_demo_files()
     except gr.Error:
@@ -68,9 +73,8 @@ def load_demo_data(progress=gr.Progress(track_tqdm=True)):
     mat_str  = "×".join(str(x) for x in mat) if mat else ""
 
     demo_info = (
-        f"HF Hub: {_HF_REPO}\n"
-        f"  demo/ph_single_echo.nii.gz   (phase)\n"
-        f"  demo/mask_single_echo.nii.gz (mask)\n"
+        f"demo/ph_single_echo.nii.gz   (phase)\n"
+        f"demo/mask_single_echo.nii.gz (mask)\n"
         f"Matrix: {mat_str} · Voxel: {vox_str} mm · TE: {te_str} s · B0: {b0} T\n"
         f"Ready — click ▶ Run Reconstruction to proceed."
     )
