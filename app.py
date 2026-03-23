@@ -3,7 +3,6 @@ iQSM – Gradio Web Interface
 
 Launch:
     python app.py                   # CPU
-    python app.py --share           # public Gradio link
     python app.py --server-port 8080
 
 Docker:
@@ -142,22 +141,22 @@ _LFS_VMAX     =  0.05  # ppm
 
 
 def _make_slice_figure(nii_path: str, vmin: float, vmax: float):
-    """Render axial/coronal/sagittal middle slices; return PNG file paths."""
+    """Render axial/coronal/sagittal middle slices; return list of (path, caption) for Gallery."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     vol = nib.load(nii_path).get_fdata(dtype=np.float32)
 
-    raw_slices = [
-        vol[:, :, vol.shape[2] // 2].T,
-        vol[:, vol.shape[1] // 2, :].T,
-        vol[vol.shape[0] // 2, :, :].T,
+    slices = [
+        (vol[:, :, vol.shape[2] // 2].T, "Axial"),
+        (vol[:, vol.shape[1] // 2, :].T, "Coronal"),
+        (vol[vol.shape[0] // 2, :, :].T, "Sagittal"),
     ]
 
     out_dir = tempfile.mkdtemp(prefix="iqsm_preview_")
-    paths = []
-    for i, sl in enumerate(raw_slices):
+    result = []
+    for i, (sl, caption) in enumerate(slices):
         fig, ax = plt.subplots(figsize=(4, 4), dpi=120)
         ax.imshow(sl, cmap="gray", origin="lower", aspect="equal", vmin=vmin, vmax=vmax)
         ax.axis("off")
@@ -168,9 +167,9 @@ def _make_slice_figure(nii_path: str, vmin: float, vmax: float):
         fig.savefig(path, dpi=120, bbox_inches="tight", pad_inches=0,
                     facecolor="#111827")
         plt.close(fig)
-        paths.append(path)
+        result.append((path, caption))
 
-    return paths[0], paths[1], paths[2]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -228,17 +227,17 @@ def reconstruct(
         )
 
     try:
-        ax_qsm, cor_qsm, sag_qsm = _make_slice_figure(qsm_path, _DISPLAY_VMIN, _DISPLAY_VMAX)
+        qsm_gallery = _make_slice_figure(qsm_path, _DISPLAY_VMIN, _DISPLAY_VMAX)
     except Exception:
-        ax_qsm = cor_qsm = sag_qsm = None
+        qsm_gallery = []
 
     try:
-        ax_lfs, cor_lfs, sag_lfs = _make_slice_figure(lfs_path, _LFS_VMIN, _LFS_VMAX)
+        lfs_gallery = _make_slice_figure(lfs_path, _LFS_VMIN, _LFS_VMAX)
     except Exception:
-        ax_lfs = cor_lfs = sag_lfs = None
+        lfs_gallery = []
 
     status = "✅ Done — download QSM and LFS files below."
-    return status, qsm_path, lfs_path, ax_qsm, cor_qsm, sag_qsm, ax_lfs, cor_lfs, sag_lfs
+    return status, qsm_path, lfs_path, qsm_gallery, lfs_gallery
 
 
 # ---------------------------------------------------------------------------
@@ -439,16 +438,16 @@ def build_ui():
                     lfs_file = gr.File(label="LFS — tissue field (.nii.gz)")
 
                 gr.HTML('<p class="sec-label" style="margin-top:14px">Preview — QSM (−0.2 to 0.2 ppm)</p>')
-                with gr.Row():
-                    axial_img    = gr.Image(label="Axial",    show_label=True, height=200, type="filepath")
-                    coronal_img  = gr.Image(label="Coronal",  show_label=True, height=200, type="filepath")
-                    sagittal_img = gr.Image(label="Sagittal", show_label=True, height=200, type="filepath")
+                qsm_gallery = gr.Gallery(
+                    columns=3, rows=1, height=220,
+                    object_fit="contain", show_label=False,
+                )
 
                 gr.HTML('<p class="sec-label" style="margin-top:10px">Preview — LFS tissue field (−0.05 to 0.05 ppm)</p>')
-                with gr.Row():
-                    axial_lfs    = gr.Image(label="Axial",    show_label=True, height=200, type="filepath")
-                    coronal_lfs  = gr.Image(label="Coronal",  show_label=True, height=200, type="filepath")
-                    sagittal_lfs = gr.Image(label="Sagittal", show_label=True, height=200, type="filepath")
+                lfs_gallery = gr.Gallery(
+                    columns=3, rows=1, height=220,
+                    object_fit="contain", show_label=False,
+                )
 
         # ── Footer ──────────────────────────────────────────────────────
         gr.HTML("""
@@ -468,9 +467,7 @@ def build_ui():
             outputs=[te_str, voxel_str, b0_val],
         )
 
-        _run_outputs  = [status_box, qsm_file, lfs_file,
-                         axial_img, coronal_img, sagittal_img,
-                         axial_lfs, coronal_lfs, sagittal_lfs]
+        _run_outputs  = [status_box, qsm_file, lfs_file, qsm_gallery, lfs_gallery]
         _demo_outputs = [
             phase_file, mask_file, te_str, voxel_str, b0_val, eroded_rad, negate_phase,
             demo_info_box,
@@ -492,7 +489,6 @@ def build_ui():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="iQSM Gradio server")
-    parser.add_argument("--share",       action="store_true", help="Create public Gradio link")
     parser.add_argument("--server-port", type=int, default=7860)
     parser.add_argument("--server-name", type=str, default="0.0.0.0")
     args = parser.parse_args()
@@ -501,7 +497,6 @@ if __name__ == "__main__":
     demo.launch(
         theme=_THEME,
         css=_CSS,
-        share=args.share,
         server_name=args.server_name,
         server_port=args.server_port,
         show_error=True,
