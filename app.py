@@ -188,36 +188,32 @@ _LFS_VMIN     = -0.05  # ppm  (LFS tissue field)
 _LFS_VMAX     =  0.05  # ppm
 
 
-def _make_slice_figure(nii_path: str, vmin: float, vmax: float):
-    """Render axial/coronal/sagittal middle slices; return list of (path, caption) for Gallery."""
+def _make_slice_figure(nii_path: str, vmin: float, vmax: float) -> str:
+    """Render axial/coronal/sagittal middle slices as one combined figure; return path."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     vol = nib.load(nii_path).get_fdata(dtype=np.float32)
-
     slices = [
         (vol[:, :, vol.shape[2] // 2].T, "Axial"),
         (vol[:, vol.shape[1] // 2, :].T, "Coronal"),
         (vol[vol.shape[0] // 2, :, :].T, "Sagittal"),
     ]
 
-    out_dir = tempfile.mkdtemp(prefix="iqsm_preview_")
-    result = []
-    for i, (sl, caption) in enumerate(slices):
-        fig, ax = plt.subplots(figsize=(4, 4), dpi=120)
+    bg = "#111827"
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    fig.patch.set_facecolor(bg)
+    for ax, (sl, label) in zip(axes, slices):
         ax.imshow(sl, cmap="gray", origin="lower", aspect="equal", vmin=vmin, vmax=vmax)
+        ax.set_title(label, color="white", fontsize=11, pad=5)
         ax.axis("off")
-        fig.patch.set_facecolor("#111827")
-        ax.set_facecolor("#111827")
-        plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-        path = os.path.join(out_dir, f"slice_{i}.png")
-        fig.savefig(path, dpi=120, bbox_inches="tight", pad_inches=0,
-                    facecolor="#111827")
-        plt.close(fig)
-        result.append((path, caption))
-
-    return result
+        ax.set_facecolor(bg)
+    plt.subplots_adjust(left=0.01, right=0.99, top=0.92, bottom=0.01, wspace=0.04)
+    path = os.path.join(tempfile.mkdtemp(prefix="iqsm_preview_"), "preview.png")
+    fig.savefig(path, dpi=110, bbox_inches="tight", pad_inches=0.1, facecolor=bg)
+    plt.close(fig)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -269,23 +265,23 @@ def reconstruct(
             progress_fn=_progress,
         )
     except CheckpointNotFoundError:
-        return _ckpt_not_found_html(), None, None, [], []
+        return _ckpt_not_found_html(), None, None, None, None
     except Exception:
         tb = traceback.format_exc()
         print(tb, flush=True)
-        return _status_html("Reconstruction failed — check the terminal / Docker log for the full error.", ok=False), None, None, [], []
+        return _status_html("Reconstruction failed — check the terminal / Docker log for the full error.", ok=False), None, None, None, None
 
     try:
-        qsm_gallery = _make_slice_figure(qsm_path, _DISPLAY_VMIN, _DISPLAY_VMAX)
+        qsm_img = _make_slice_figure(qsm_path, _DISPLAY_VMIN, _DISPLAY_VMAX)
     except Exception:
-        qsm_gallery = []
+        qsm_img = None
 
     try:
-        lfs_gallery = _make_slice_figure(lfs_path, _LFS_VMIN, _LFS_VMAX)
+        lfs_img = _make_slice_figure(lfs_path, _LFS_VMIN, _LFS_VMAX)
     except Exception:
-        lfs_gallery = []
+        lfs_img = None
 
-    return _status_html("✅ Done — download QSM and LFS files below."), qsm_path, lfs_path, qsm_gallery, lfs_gallery
+    return _status_html("✅ Done — download QSM and LFS files below."), qsm_path, lfs_path, qsm_img, lfs_img
 
 
 # ---------------------------------------------------------------------------
@@ -405,10 +401,9 @@ _CSS = """
 /* ── Hide Gradio share button ─────────────────────────────────── */
 .share-button { display: none !important; }
 
-/* ── Gallery: click-to-fullscreen, no overlay buttons ───────────
-   Images go directly to browser fullscreen on click; click again
-   to exit. All gallery hover/overlay action buttons are hidden. */
-.gallery img { cursor: zoom-in !important; }
+/* ── Preview images: click-to-fullscreen, no buttons ────────────
+   Click the image to enter browser fullscreen; click again to exit. */
+#qsm-preview img, #lfs-preview img { cursor: zoom-in !important; }
 img:fullscreen, img:-webkit-full-screen {
     object-fit: contain !important;
     background: #000 !important;
@@ -416,14 +411,8 @@ img:fullscreen, img:-webkit-full-screen {
     width: 100vw !important;
     height: 100vh !important;
 }
-.gallery .icon-buttons,
-.gallery .icon-button,
-.gallery .download,
-.gallery .share,
-[data-testid="gallery"] .icon-buttons,
-[data-testid="gallery"] .icon-button,
-[data-testid="gallery"] .download,
-[data-testid="gallery"] .share { display: none !important; }
+#qsm-preview button, #lfs-preview button,
+#qsm-preview .icon-buttons, #lfs-preview .icon-buttons { display: none !important; }
 """
 
 _THEME = gr.themes.Default(
@@ -449,9 +438,7 @@ _HEAD = """<script>
         }
     });
 
-    // ── Gallery: click image → browser fullscreen; click again → exit ──
-    // Capture phase runs before Gradio's bubble-phase lightbox handler,
-    // so stopImmediatePropagation() prevents the lightbox from opening.
+    // ── Preview images: click → browser fullscreen; click again → exit ──
     document.addEventListener('click', function(e) {
         if (document.fullscreenElement) {
             document.exitFullscreen();
@@ -460,7 +447,8 @@ _HEAD = """<script>
             return;
         }
         var img = e.target.closest('img');
-        if (img && img.closest('.gallery, [data-testid="gallery"]')) {
+        if (!img) return;
+        if (img.closest('#qsm-preview, #lfs-preview')) {
             e.preventDefault();
             e.stopImmediatePropagation();
             img.requestFullscreen().catch(console.error);
@@ -559,18 +547,18 @@ def build_ui():
                     qsm_file = gr.File(label="QSM — susceptibility map (.nii.gz)")
                     lfs_file = gr.File(label="LFS — tissue field (.nii.gz)")
 
-                gr.HTML('<p class="sec-label" style="margin-top:14px">Preview — QSM (−0.2 to 0.2 ppm)</p>')
-                qsm_gallery = gr.Gallery(
-                    columns=3, rows=1, height=220,
-                    object_fit="contain", show_label=False,
-
+                gr.HTML('<p class="sec-label" style="margin-top:14px">Preview — QSM (−0.2 to 0.2 ppm) &nbsp;<span style="font-weight:400;font-size:0.78rem;color:#94a3b8">click to fullscreen</span></p>')
+                qsm_preview = gr.Image(
+                    show_label=False, show_download_button=False,
+                    show_share_button=False, interactive=False,
+                    elem_id="qsm-preview", height=220,
                 )
 
-                gr.HTML('<p class="sec-label" style="margin-top:10px">Preview — LFS tissue field (−0.05 to 0.05 ppm)</p>')
-                lfs_gallery = gr.Gallery(
-                    columns=3, rows=1, height=220,
-                    object_fit="contain", show_label=False,
-
+                gr.HTML('<p class="sec-label" style="margin-top:10px">Preview — LFS tissue field (−0.05 to 0.05 ppm) &nbsp;<span style="font-weight:400;font-size:0.78rem;color:#94a3b8">click to fullscreen</span></p>')
+                lfs_preview = gr.Image(
+                    show_label=False, show_download_button=False,
+                    show_share_button=False, interactive=False,
+                    elem_id="lfs-preview", height=220,
                 )
 
         # ── Footer ──────────────────────────────────────────────────────
@@ -591,7 +579,7 @@ def build_ui():
             outputs=[te_str, voxel_str, b0_val],
         )
 
-        _run_outputs  = [status_box, qsm_file, lfs_file, qsm_gallery, lfs_gallery]
+        _run_outputs  = [status_box, qsm_file, lfs_file, qsm_preview, lfs_preview]
         _demo_outputs = [
             phase_file, mask_file, te_str, voxel_str, b0_val, eroded_rad, negate_phase,
             demo_info_box, status_box,
