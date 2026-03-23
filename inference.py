@@ -40,15 +40,12 @@ class CheckpointNotFoundError(Exception):
 _CKPT_NOT_FOUND_MSG = """\
 Model weights not downloaded yet.
 
-The app needs pre-trained model files to run. Download them once by running \
-this command on your computer (in the iQSM folder, not inside Docker):
+The app needs pre-trained model files to run. \
+Download them once by running this command in the iQSM project folder:
 
     python run.py --download-checkpoints
 
-This saves the files into the checkpoints/ folder. \
-Because that folder is shared with the running app, \
-you do not need to restart Docker — just click Run Reconstruction again \
-once the download finishes.\
+Once the download is complete, try again — no need to restart the app.\
 """
 
 
