@@ -54,7 +54,7 @@ def _load_lot_layer(ckpt_path: str, device: torch.device) -> LoTLayer:
     conv_op = torch.from_numpy(_CONV_OP).unsqueeze(0).unsqueeze(0)
     layer = LoTLayer(conv_op)
     layer = nn.DataParallel(layer)
-    layer.load_state_dict(torch.load(ckpt_path, map_location=device))
+    layer.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
     return layer.module
 
 
@@ -67,13 +67,13 @@ def get_models(device: torch.device):
     lot_chi = _load_lot_layer(_ckpt("LPLayer_chi_50_v2.pth"), device)
     unet_chi = Unet(4, 16, 1)
     unet_chi = nn.DataParallel(unet_chi)
-    unet_chi.load_state_dict(torch.load(_ckpt("iQSM_50_v2.pth"), map_location=device))
+    unet_chi.load_state_dict(torch.load(_ckpt("iQSM_50_v2.pth"), map_location=device, weights_only=True))
     unet_chi = unet_chi.module
 
     lot_lfs = _load_lot_layer(_ckpt("LoTLayer_lfs_40_v2.pth"), device)
     unet_lfs = Unet(4, 16, 1)
     unet_lfs = nn.DataParallel(unet_lfs)
-    unet_lfs.load_state_dict(torch.load(_ckpt("iQFM_40_v2.pth"), map_location=device))
+    unet_lfs.load_state_dict(torch.load(_ckpt("iQFM_40_v2.pth"), map_location=device, weights_only=True))
     unet_lfs = unet_lfs.module
 
     iqsm = LoT_Unet(lot_chi, unet_chi).to(device).eval()
