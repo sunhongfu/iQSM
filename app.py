@@ -288,13 +288,11 @@ def reconstruct(
 
     try:
         qsm_img = _make_slice_figure(qsm_path, _DISPLAY_VMIN, _DISPLAY_VMAX)
-    except Exception:
-        qsm_img = None
-
-    try:
         lfs_img = _make_slice_figure(lfs_path, _LFS_VMIN, _LFS_VMAX)
     except Exception:
-        lfs_img = None
+        tb = traceback.format_exc()
+        print(tb, flush=True)
+        return _status_html("✅ Done — but preview failed (see log).\n" + tb, ok=False), qsm_path, lfs_path, None, None
 
     return _status_html("✅ Done — download QSM and LFS files below."), qsm_path, lfs_path, qsm_img, lfs_img
 
@@ -437,8 +435,8 @@ _THEME = gr.themes.Default(
     neutral_hue=gr.themes.colors.slate,
 )
 
-_HEAD = """<script>
-(function() {
+_JS = """
+() => {
     // ── Theme toggle ─────────────────────────────────────────────
     var key = 'iqsm-theme';
     var saved = localStorage.getItem(key) || 'light';
@@ -469,14 +467,14 @@ _HEAD = """<script>
             img.requestFullscreen().catch(console.error);
         }
     }, true);
-})();
-</script>"""
+}
+"""
 
 TITLE = "iQSM — Quantitative Susceptibility Mapping"
 
 
 def build_ui():
-    with gr.Blocks(title=TITLE) as demo:
+    with gr.Blocks(title=TITLE, js=_JS) as demo:
 
         # ── Header ──────────────────────────────────────────────────────
         gr.HTML("""
@@ -622,7 +620,6 @@ if __name__ == "__main__":
     demo.launch(
         theme=_THEME,
         css=_CSS,
-        head=_HEAD,
         server_name=args.server_name,
         server_port=args.server_port,
         show_error=True,
