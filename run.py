@@ -181,17 +181,21 @@ def main():
     if args.te <= 0:
         parser.error("--te must be positive (value in seconds, e.g. 0.020).")
 
-    from inference import run_iqsm
-    qsm_path, lfs_path = run_iqsm(
-        phase_nii_path=args.phase,
-        te=args.te,
-        mask_nii_path=args.mask,
-        voxel_size=args.voxel_size,
-        b0=args.b0,
-        eroded_rad=args.eroded_rad,
-        phase_sign=args.phase_sign,
-        output_dir=args.output,
-    )
+    from inference import run_iqsm, CheckpointNotFoundError
+    try:
+        qsm_path, lfs_path = run_iqsm(
+            phase_nii_path=args.phase,
+            te=args.te,
+            mask_nii_path=args.mask,
+            voxel_size=args.voxel_size,
+            b0=args.b0,
+            eroded_rad=args.eroded_rad,
+            phase_sign=args.phase_sign,
+            output_dir=args.output,
+        )
+    except CheckpointNotFoundError as exc:
+        print(f"\nError: {exc}\n", flush=True)
+        raise SystemExit(1)
 
     print(f"\nOutputs:")
     print(f"  QSM (susceptibility): {qsm_path}")
