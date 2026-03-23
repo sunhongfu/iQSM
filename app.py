@@ -36,9 +36,9 @@ _DEMO_FILES = [
 
 _DEMO_NOT_FOUND_MSG = (
     "Demo data not found in demo/.\n\n"
-    "Run this on the host before starting Docker:\n\n"
+    "Run this on the host machine (outside Docker):\n\n"
     "    python run.py --download-demo\n\n"
-    "Then restart the app or reload this page."
+    "Then click Load Demo Data again — no restart needed."
 )
 
 
@@ -58,10 +58,11 @@ def _load_demo_files() -> tuple[str, str, dict]:
 
 def load_demo_data(progress=gr.Progress(track_tqdm=True)):
     """Load demo files and populate all input fields. Does not run reconstruction."""
+    _no_change = (gr.update(),) * 8  # phase, mask, te, vox, b0, eroded, negate, demo_info
     try:
         phase_path, mask_path, params = _load_demo_files()
     except Exception as exc:
-        raise gr.Error(str(exc))
+        return (*_no_change, _status_html(str(exc), ok=False))
 
     te       = params["TE_seconds"]
     te_str   = str(te) if isinstance(te, (int, float)) else ", ".join(f"{v:.4g}" for v in te)
@@ -85,6 +86,7 @@ def load_demo_data(progress=gr.Progress(track_tqdm=True)):
         te_str, vox_str,
         b0, eroded, negate,
         gr.update(value=demo_info, visible=True),
+        "",
     )
 
 
@@ -553,7 +555,7 @@ def build_ui():
         _run_outputs  = [status_box, qsm_file, lfs_file, qsm_gallery, lfs_gallery]
         _demo_outputs = [
             phase_file, mask_file, te_str, voxel_str, b0_val, eroded_rad, negate_phase,
-            demo_info_box,
+            demo_info_box, status_box,
         ]
 
         run_btn.click(
