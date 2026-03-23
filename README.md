@@ -188,17 +188,40 @@ QSM = iQSM(phase, TE, 'mag', mag, 'mask', mask, ...
 
 Model weights and demo data are hosted on [Hugging Face Hub](https://huggingface.co/sunhongfu/iQSM).
 
-```bash
-# Download model weights into checkpoints/
-python run.py --download-checkpoints
+> **Docker users:** Download on the **host machine** before or after starting the container — not inside Docker. The `checkpoints/` folder is bind-mounted, so files appear inside the container immediately without a restart.
 
-# Download demo data into demo/ and print the run command
-python run.py --download-demo
+### Option A — Python script (recommended)
+
+```bash
+python run.py --download-checkpoints   # download model weights into checkpoints/
+python run.py --download-demo          # (optional) download demo data into demo/
 ```
 
-> **Docker users:** Run these commands on the **host machine** before or after starting the container — not inside Docker. The folders are bind-mounted, so files appear immediately without a restart.
+### Option B — Manual download (no Python required)
 
-Files are also cached in `~/.cache/huggingface/hub/` for reuse.
+If you are not comfortable running Python, download the files directly from Hugging Face and place them in the `checkpoints/` folder inside your cloned repository.
+
+**Model weights** — download all four files and save them into `checkpoints/`:
+
+| File | Direct download link |
+|---|---|
+| `iQSM_50_v2.pth` | https://huggingface.co/sunhongfu/iQSM/resolve/main/iQSM_50_v2.pth |
+| `LPLayer_chi_50_v2.pth` | https://huggingface.co/sunhongfu/iQSM/resolve/main/LPLayer_chi_50_v2.pth |
+| `iQFM_40_v2.pth` | https://huggingface.co/sunhongfu/iQSM/resolve/main/iQFM_40_v2.pth |
+| `LoTLayer_lfs_40_v2.pth` | https://huggingface.co/sunhongfu/iQSM/resolve/main/LoTLayer_lfs_40_v2.pth |
+
+After downloading, your folder should look like this:
+
+```
+iQSM/
+└── checkpoints/
+    ├── iQSM_50_v2.pth
+    ├── LPLayer_chi_50_v2.pth
+    ├── iQFM_40_v2.pth
+    └── LoTLayer_lfs_40_v2.pth
+```
+
+Then start the app with `docker compose up` — no Python needed.
 
 ---
 
