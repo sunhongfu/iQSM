@@ -388,7 +388,7 @@ function() {
     }
     function updateBtn(theme) {
         const btn = document.getElementById('theme-toggle');
-        if (btn) btn.textContent = theme === 'dark' ? '\u2600\ufe0f Light mode' : '\ud83c\udf19 Dark mode';
+        if (btn) btn.textContent = theme === 'dark' ? '\u2600 Light mode' : '\u263d Dark mode';
     }
     updateBtn(saved);
     document.addEventListener('click', function(e) {
@@ -411,7 +411,7 @@ def build_ui():
         # ── Header ──────────────────────────────────────────────────────
         gr.HTML("""
         <div class="app-header">
-          <button id="theme-toggle">🌙 Dark mode</button>
+          <button id="theme-toggle">&#x263D; Dark mode</button>
           <h1>iQSM &mdash; Quantitative Susceptibility Mapping</h1>
           <p>
             Deep learning QSM reconstruction from single-echo MRI phase
