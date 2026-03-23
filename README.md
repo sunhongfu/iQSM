@@ -4,9 +4,7 @@
 
 [NeuroImage 2022](https://www.sciencedirect.com/science/article/pii/S1053811922005274) &nbsp;|&nbsp; [arXiv](https://arxiv.org/abs/2111.07665) &nbsp;|&nbsp; [HuggingFace](https://huggingface.co/sunhongfu/iQSM) &nbsp;|&nbsp; [deepMRI collection](https://github.com/sunhongfu/deepMRI)
 
-iQSM enables single-step (end-to-end) local field and QSM reconstruction directly from raw MRI phase images, using a large-stencil Laplacian preprocessed deep neural network (LoT-Unet) — no separate background field removal needed.
-
-> **Update (March 2025):** New user-friendly MATLAB wrappers for iQSM/iQFM/iQSM+/xQSM/xQSM+ with simpler syntax — see the [iQSM+](https://github.com/sunhongfu/iQSM_Plus) repo.
+iQSM performs single-step, end-to-end local field (iQFM) and susceptibility (QSM) reconstruction directly from raw MRI phase — no separate background field removal step needed. It uses a large-stencil Laplacian preprocessed deep neural network (LoT-Unet).
 
 > **Tip:** For data with resolution finer than 0.7 mm isotropic, interpolate to 1 mm before reconstruction for best results.
 
@@ -14,188 +12,223 @@ iQSM enables single-step (end-to-end) local field and QSM reconstruction directl
 
 ## Overview
 
-### Framework
+![Framework](https://www.dropbox.com/s/7bxkyu1utxux76k/Figs_1.png?raw=1)
 
-![Whole Framework](https://www.dropbox.com/s/7bxkyu1utxux76k/Figs_1.png?raw=1)
+*Fig. 1: iQFM and iQSM framework using the proposed LoT-Unet architecture.*
 
-Fig. 1: Overview of the iQFM and iQSM framework using the proposed LoT-Unet architecture, composed of a tailored Lap-Layer and a 3D residual U-net.
+![Results](https://www.dropbox.com/s/9jt391q22sgber6/Figs_2.png?raw=1)
 
-### Representative Results
-
-![Representative Results](https://www.dropbox.com/s/9jt391q22sgber6/Figs_2.png?raw=1)
-
-Fig. 2: Comparison of different QSM methods on three ICH patients. Red arrows indicate artifacts near hemorrhage sources.
+*Fig. 2: Comparison of QSM methods on ICH patients. Red arrows indicate artifacts near hemorrhage sources.*
 
 ---
 
-## Model Checkpoints and Demo Data
+## Which Setup Should I Use?
 
-Pre-trained model weights and demo datasets are hosted on **[Hugging Face Hub](https://huggingface.co/sunhongfu/iQSM)** (`sunhongfu/iQSM`).
+| I want to… | Best option |
+|---|---|
+| Just try it quickly, no coding | **Docker** (Option 1) |
+| Use the web app on a shared server | **Docker** or **Conda** |
+| Run from the command line / scripts | **Conda** or **pip** |
+| Call from MATLAB | **MATLAB wrapper** (requires Conda or pip) |
+| Use an NVIDIA GPU | **Docker** (GPU mode) or **Conda/pip** |
 
-**Why Hugging Face?**
-- GitHub repositories are not designed for large binary files. Hugging Face Hub provides reliable, version-controlled hosting for ML model weights and large NIfTI volumes with no file-size limits.
-- The `huggingface_hub` library handles caching automatically: files are downloaded once and stored in `~/.cache/huggingface/hub/`, so subsequent runs load from disk instantly.
+---
 
-**Auto-download behaviour:**
-- **Checkpoints** — downloaded automatically on first inference (via `run.py` or `app.py`). No manual step required.
-- **Demo data** — downloaded when you run `python run.py --download-demo` or click **⬇ Load Demo Data** in the web app.
+## Option 1 — Docker (Web App, Recommended)
 
-You can also pre-warm the cache manually:
+**Best for:** Windows, macOS (including Apple Silicon), Linux. No Python setup needed.
+
+**Requirements:** [Docker Desktop](https://docs.docker.com/get-docker/) (or Docker Engine on Linux).
+
+### Steps
 
 ```bash
-python run.py --download-demo          # fetch demo NIfTIs + params.json
-python run.py --download-checkpoints   # fetch model weights
-```
-
----
-
-## Requirements
-
-- Python 3.7+, PyTorch 1.8+
-- NVIDIA GPU (CUDA 10.0+) recommended; CPU also works
-- MATLAB R2017b+ (for MATLAB wrapper only — not needed for web app)
-- FSL (for BET brain mask extraction, optional)
-
-Tested on: CentOS 7.8 (Tesla V100), macOS 12 / Ubuntu 19.10 (GTX 1060).
-
----
-
-## Quick Start — Web App (no MATLAB needed)
-
-The easiest way to run iQSM. Pretrained checkpoints and demo data download automatically on first use.
-
-### Option A: Docker (recommended — zero setup)
-
-```bash
+# 1. Clone the repository
 git clone https://github.com/sunhongfu/iQSM.git
 cd iQSM
+
+# 2. Download model weights (run once, on the host — not inside Docker)
+python run.py --download-checkpoints
+
+# 3. (Optional) Download demo data to try the app
+python run.py --download-demo
+
+# 4. Start the app
 docker compose up
 ```
 
 Open **http://localhost:7860** in your browser.
-Click **⬇ Load Demo Data** to fill in demo parameters, then **▶ Run Reconstruction** to process.
 
-> For NVIDIA GPU support, edit `docker-compose.yml` and set `TORCH_VARIANT=cu121`, then uncomment the GPU block.
+> The `demo/` and `checkpoints/` folders are bind-mounted into the container — files downloaded on the host are immediately visible inside Docker without a restart.
 
-### Option B: Conda
+### Enable NVIDIA GPU (Linux only)
+
+1. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+2. Edit `docker-compose.yml`: set `TORCH_VARIANT: cu121`.
+3. Uncomment the GPU block at the bottom of `docker-compose.yml`.
+4. Rebuild and start:
 
 ```bash
+docker compose build
+docker compose up
+```
+
+---
+
+## Option 2 — Conda (Web App + CLI)
+
+**Best for:** Users with Anaconda or Miniconda already installed.
+
+**Requirements:** [Anaconda](https://www.anaconda.com/download) or [Miniconda](https://docs.anaconda.com/miniconda/).
+
+### Steps
+
+```bash
+# 1. Clone the repository
 git clone https://github.com/sunhongfu/iQSM.git
 cd iQSM
 
+# 2. Create and activate the environment
 conda env create -f environment.yml
 conda activate iqsm
 
+# 3a. Launch the web app
 python app.py
+#     → open http://localhost:7860
+
+# 3b. Or use the command line directly
+python run.py --download-demo          # download demo data
+python run.py --download-checkpoints   # download model weights
+python run.py --phase ph.nii.gz --te 0.020 --mask mask.nii.gz
 ```
 
-Open **http://localhost:7860** in your browser.
+> **GPU note:** `environment.yml` installs `pytorch-cuda=12.1` by default. To install CPU-only, remove that line from `environment.yml` before running `conda env create`.
 
-### Option C: pip
+---
+
+## Option 3 — pip (Web App + CLI)
+
+**Best for:** Users who prefer pip, or already have a Python environment.
+
+**Requirements:** Python 3.10+.
+
+### Steps
 
 ```bash
+# 1. Clone the repository
 git clone https://github.com/sunhongfu/iQSM.git
 cd iQSM
 
-pip install torch          # CPU — or see requirements.txt for GPU options
+# 2. Install PyTorch (choose one):
+pip install torch                                                        # Apple Silicon or CPU
+pip install torch --index-url https://download.pytorch.org/whl/cpu      # Linux/Windows CPU-only
+pip install torch --index-url https://download.pytorch.org/whl/cu121    # Linux/Windows NVIDIA GPU
+
+# 3. Install remaining dependencies
 pip install -r requirements.txt
 
+# 4a. Launch the web app
 python app.py
-```
+#     → open http://localhost:7860
 
-Open **http://localhost:7860** in your browser.
-
----
-
-## Quick Start — Command Line
-
-```bash
-# First time: download demo data and see how to run it
-python run.py --download-demo
-
-# Run reconstruction on your own data
+# 4b. Or use the command line directly
+python run.py --download-demo          # download demo data
+python run.py --download-checkpoints   # download model weights
 python run.py --phase ph.nii.gz --te 0.020 --mask mask.nii.gz
-
-# Use a config file
-python run.py --config config.yaml
-
-# All options
-python run.py --help
 ```
-
-Checkpoints are downloaded automatically on first run and cached in `~/.cache/huggingface/hub/`.
 
 ---
 
-## Quick Start — MATLAB Wrapper
+## Option 4 — MATLAB Wrapper
 
-### 1. Clone and set up
+**Best for:** Users already working in MATLAB who want to call iQSM directly.
+
+**Requirements:** MATLAB R2017b+, and a working Python environment (Conda or pip — see Options 2/3 above).
+
+> **Windows users:** Run `iQSM_fcns/ConfigurePython.m` first and update the `pyExec` variable to your Python executable path.
+
+### Steps
 
 ```bash
+# 1. Clone the repository
 git clone https://github.com/sunhongfu/iQSM.git
+
+# 2. Set up Python environment (Conda or pip, see Options 2/3 above)
+#    Model weights are downloaded automatically on first inference.
 ```
-
-Checkpoints are downloaded automatically on first inference. No manual download needed.
-
-### 2. Run on demo data
 
 ```matlab
-% Single-echo
+% Run the demo scripts
 demo_single_echo
-
-% Multi-echo
 demo_multi_echo
 ```
 
----
-
-## MATLAB Wrapper Usage
+### Function signature
 
 ```matlab
-QSM = iQSM(phase, TE, 'mag', mag, 'mask', mask, 'voxel_size', [1,1,1], 'B0', 3, 'B0_dir', [0,0,1]);
+QSM = iQSM(phase, TE, 'mag', mag, 'mask', mask, ...
+            'voxel_size', [1,1,1], 'B0', 3, 'B0_dir', [0,0,1], ...
+            'output_dir', pwd);
 ```
 
-**Compulsory inputs:**
-- `phase` — 3D (single-echo) or 4D (multi-echo) GRE phase volume
-- `TE` — echo time(s) in seconds, e.g. `20e-3` or `[4,8,12]*1e-3`
-
-**Optional inputs:**
-- `mag` — magnitude volume (default: ones)
-- `mask` — brain mask (default: ones)
-- `voxel_size` — resolution in mm (default: `[1 1 1]`)
-- `B0_dir` — B0 direction (default: `[0 0 1]` for axial)
-- `B0` — field strength in Tesla (default: `3`)
-- `output_dir` — output folder (default: current directory)
+| Parameter | Required | Description |
+|---|---|---|
+| `phase` | ✓ | 3D (single-echo) or 4D (multi-echo) GRE phase volume |
+| `TE` | ✓ | Echo time(s) in seconds — e.g. `20e-3` or `[4,8,12]*1e-3` |
+| `mag` | | Magnitude volume (default: ones) |
+| `mask` | | Brain mask (default: ones) |
+| `voxel_size` | | Resolution in mm (default: `[1 1 1]`) |
+| `B0_dir` | | B0 direction unit vector (default: `[0 0 1]` for axial) |
+| `B0` | | Field strength in Tesla (default: `3`) |
+| `output_dir` | | Output folder (default: current directory) |
 
 ---
 
-## Code Structure
+## Downloading Checkpoints and Demo Data
 
-| File | Description |
-|------|-------------|
-| `app.py` | Gradio web UI |
-| `run.py` | Command-line interface |
-| `inference.py` | PyTorch inference engine |
-| `demo_single_echo.m` | MATLAB demo: single-echo simulated data |
-| `demo_multi_echo.m` | MATLAB demo: multi-echo in vivo data |
-| `PythonCodes/` | Training scripts and model definitions |
-
----
-
-## Training
-
-```matlab
-% Prepare training data
-matlab -nodisplay -r PrepareFullSizedImages
-matlab -nodisplay -r cropQSMs
-matlab -nodisplay -r GenerateHealthyPatches
-matlab -nodisplay -r Gen_HemoCal
-```
+Model weights and demo data are hosted on [Hugging Face Hub](https://huggingface.co/sunhongfu/iQSM).
 
 ```bash
-# Train networks
-python PythonCodes/Training/FixedLapLayer/TrainiQSM/TrainiQSM.py
-python PythonCodes/Training/FixedLapLayer/TrainiQFM/TrainiQFM.py
+# Download model weights into checkpoints/
+python run.py --download-checkpoints
+
+# Download demo data into demo/ and print the run command
+python run.py --download-demo
+```
+
+> **Docker users:** Run these commands on the **host machine** before or after starting the container — not inside Docker. The folders are bind-mounted, so files appear immediately without a restart.
+
+Files are also cached in `~/.cache/huggingface/hub/` for reuse.
+
+---
+
+## Web App Features
+
+- Upload phase NIfTI (`.nii` / `.nii.gz`)
+- Optionally upload a brain mask
+- Click **⬇ Load Demo Data** to auto-fill all fields with the demo dataset
+- Click **▶ Run Reconstruction** to generate QSM and tissue field maps
+- Download output NIfTI files — view in [FSLeyes](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FSLeyes), [ITK-SNAP](http://www.itksnap.org/), or [3D Slicer](https://www.slicer.org/)
+
+---
+
+## Command Line Reference
+
+```bash
+# Show all options
+python run.py --help
+
+# Download demo data (prints example run command)
+python run.py --download-demo
+
+# Basic single-echo reconstruction
+python run.py --phase ph.nii.gz --te 0.020 --mask mask.nii.gz
+
+# Override output directory
+python run.py --phase ph.nii.gz --te 0.020 --output ./my_output/
+
+# Use a YAML config file
+python run.py --config config.yaml
 ```
 
 ---
