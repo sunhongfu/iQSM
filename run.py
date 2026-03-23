@@ -14,11 +14,12 @@ Run:
 
 import argparse
 import os
-import shutil
+import urllib.request
 
 import yaml
 
 _HF_REPO  = "sunhongfu/iQSM"
+_HF_BASE  = f"https://huggingface.co/{_HF_REPO}/resolve/main"
 _HERE     = os.path.dirname(os.path.abspath(__file__))
 _DEMO_DIR = os.path.join(_HERE, "demo")
 _CKPT_DIR = os.path.join(_HERE, "checkpoints")
@@ -41,11 +42,10 @@ _CKPT_FILENAMES = [
 # ---------------------------------------------------------------------------
 
 def _download_to(hf_path: str, local_name: str, dest_dir: str) -> str:
-    """Download one file from HF Hub into dest_dir, return local path."""
-    from huggingface_hub import hf_hub_download
-    cached = hf_hub_download(repo_id=_HF_REPO, filename=hf_path)
+    """Download one file from HuggingFace into dest_dir, return local path."""
+    url = f"{_HF_BASE}/{hf_path}"
     local = os.path.join(dest_dir, local_name)
-    shutil.copy(cached, local)
+    urllib.request.urlretrieve(url, local)
     return local
 
 
