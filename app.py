@@ -221,12 +221,11 @@ def reconstruct(
             progress_fn=_progress,
         )
     except CheckpointNotFoundError as exc:
-        raise gr.Error(str(exc))
+        return str(exc), None, None, [], []
     except Exception:
-        raise gr.Error(
-            "Reconstruction failed — check the log for details.\n\n"
-            + traceback.format_exc()
-        )
+        tb = traceback.format_exc()
+        print(tb, flush=True)
+        return "Reconstruction failed — check the terminal / Docker log for the full error.", None, None, [], []
 
     try:
         qsm_gallery = _make_slice_figure(qsm_path, _DISPLAY_VMIN, _DISPLAY_VMAX)
@@ -443,7 +442,7 @@ def build_ui():
 
                 status_box = gr.Textbox(
                     label="Status",
-                    lines=2, interactive=False,
+                    lines=4, interactive=False,
                     placeholder="Results will appear here after reconstruction …",
                     elem_id="status-box",
                 )
