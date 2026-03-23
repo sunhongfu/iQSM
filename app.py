@@ -549,15 +549,13 @@ def build_ui():
 
                 gr.HTML('<p class="sec-label" style="margin-top:14px">Preview — QSM (−0.2 to 0.2 ppm) &nbsp;<span style="font-weight:400;font-size:0.78rem;color:#94a3b8">click to fullscreen</span></p>')
                 qsm_preview = gr.Image(
-                    show_label=False, show_download_button=False,
-                    show_share_button=False, interactive=False,
+                    show_label=False, interactive=False,
                     elem_id="qsm-preview", height=220,
                 )
 
                 gr.HTML('<p class="sec-label" style="margin-top:10px">Preview — LFS tissue field (−0.05 to 0.05 ppm) &nbsp;<span style="font-weight:400;font-size:0.78rem;color:#94a3b8">click to fullscreen</span></p>')
                 lfs_preview = gr.Image(
-                    show_label=False, show_download_button=False,
-                    show_share_button=False, interactive=False,
+                    show_label=False, interactive=False,
                     elem_id="lfs-preview", height=220,
                 )
 
