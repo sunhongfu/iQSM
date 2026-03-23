@@ -6,7 +6,6 @@ Uses the learnable LoT-layer architecture (iQSM v2 checkpoints).
 """
 
 import os
-import sys
 import tempfile
 
 import numpy as np
@@ -15,29 +14,42 @@ import torch
 import torch.nn as nn
 from scipy.ndimage import binary_erosion
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_LEARNABLE_DIR = os.path.join(_HERE, "PythonCodes", "Evaluation", "LearnableLapLayer")
-CHECKPOINTS_DIR = os.path.join(_HERE, "iQSM_fcns")
-
-if _LEARNABLE_DIR not in sys.path:
-    sys.path.insert(0, _LEARNABLE_DIR)
-
-from LoT_Unet import LoT_Unet  # noqa: E402  (learnable version)
-from Unet import Unet  # noqa: E402
-from Unet_blocks import LoTLayer  # noqa: E402  (learnable LoTLayer)
+from models.lot_unet import LoT_Unet
+from models.unet import Unet
+from models.unet_blocks import LoTLayer
 
 # ---------------------------------------------------------------------------
-# Checkpoint download via Hugging Face Hub (cached automatically)
+# Checkpoint management — local checkpoints/ first, then HF Hub
 # ---------------------------------------------------------------------------
-_HF_REPO = "sunhongfu/iQSM"
+_HF_REPO  = "sunhongfu/iQSM"
+_HERE     = os.path.dirname(os.path.abspath(__file__))
+_CKPT_DIR = os.path.join(_HERE, "checkpoints")
+
+_CKPT_FILENAMES = [
+    "iQSM_50_v2.pth",
+    "LPLayer_chi_50_v2.pth",
+    "iQFM_40_v2.pth",
+    "LoTLayer_lfs_40_v2.pth",
+]
 
 
 def _ckpt(filename: str) -> str:
     """Return local path to a checkpoint, downloading from HF Hub if needed."""
+    local = os.path.join(_CKPT_DIR, filename)
+    if os.path.exists(local):
+        return local
+    print(f"  Downloading checkpoint {filename} …", flush=True)
     from huggingface_hub import hf_hub_download
-    return hf_hub_download(repo_id=_HF_REPO, filename=filename)
+    import shutil
+    cached = hf_hub_download(repo_id=_HF_REPO, filename=filename)
+    os.makedirs(_CKPT_DIR, exist_ok=True)
+    shutil.copy(cached, local)
+    return local
 
 
+# ---------------------------------------------------------------------------
+# Laplacian convolution kernel
+# ---------------------------------------------------------------------------
 _CONV_OP = np.array(
     [
         [[1/13, 3/26, 1/13], [3/26, 3/13, 3/26], [1/13, 3/26, 1/13]],
@@ -83,6 +95,10 @@ def get_models(device: torch.device):
     return iqsm, iqfm
 
 
+# ---------------------------------------------------------------------------
+# Preprocessing helpers
+# ---------------------------------------------------------------------------
+
 def _make_sphere(radius):
     c = np.arange(-radius, radius + 1)
     x, y, z = np.meshgrid(c, c, c, indexing='ij')
@@ -106,6 +122,10 @@ def _zero_remove(arr, positions):
     return arr[x1:x2, y1:y2, z1:z2]
 
 
+# ---------------------------------------------------------------------------
+# Main reconstruction entry point
+# ---------------------------------------------------------------------------
+
 def run_iqsm(
     phase_nii_path: str,
     te: float,
@@ -126,7 +146,7 @@ def run_iqsm(
     ----------
     phase_nii_path : str  – wrapped phase NIfTI (3D single-echo)
     te : float            – echo time in seconds
-    mag_nii_path : str    – magnitude NIfTI (optional)
+    mag_nii_path : str    – magnitude NIfTI (optional, unused by iQSM)
     mask_nii_path : str   – brain mask NIfTI (optional)
     voxel_size : list     – [x,y,z] mm override (reads from header if None)
     b0 : float            – field strength in Tesla (default 3.0)
@@ -172,7 +192,6 @@ def run_iqsm(
     mask_pad, _ = _zero_pad(mask)
 
     _log(0.25, "Loading models …")
-    _ensure_checkpoints()
     iqsm, iqfm = get_models(device)
 
     te_t = torch.tensor([te], dtype=torch.float32).to(device)

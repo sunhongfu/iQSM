@@ -1,30 +1,34 @@
 """
 iQSM – Command-line interface
 
-Setup (first time — pre-warms the Hugging Face cache):
-    python run.py --download-demo           # fetch demo NIfTIs
-    python run.py --download-checkpoints    # fetch model weights
+Setup (first time):
+    python run.py --download-demo           # download demo NIfTIs → demo/
+    python run.py --download-checkpoints    # download model weights → checkpoints/
 
 Run:
     python run.py --config config.yaml
     python run.py --phase ph.nii.gz --te 0.020 --mask mask.nii.gz
     python run.py --config config.yaml --output ./other/   # CLI overrides config
     python run.py --help
-
-Files are cached automatically by huggingface_hub (~/.cache/huggingface/hub/).
 """
 
 import argparse
+import os
+import shutil
 
 import yaml
 
-_HF_REPO = "sunhongfu/iQSM"
+_HF_REPO  = "sunhongfu/iQSM"
+_HERE     = os.path.dirname(os.path.abspath(__file__))
+_DEMO_DIR = os.path.join(_HERE, "demo")
+_CKPT_DIR = os.path.join(_HERE, "checkpoints")
 
 _DEMO_FILES = [
     "demo/ph_single_echo.nii.gz",
     "demo/mask_single_echo.nii.gz",
+    "demo/params.json",
 ]
-_CKPT_FILES = [
+_CKPT_FILENAMES = [
     "iQSM_50_v2.pth",
     "LPLayer_chi_50_v2.pth",
     "iQFM_40_v2.pth",
@@ -36,32 +40,38 @@ _CKPT_FILES = [
 # Download helpers
 # ---------------------------------------------------------------------------
 
-def _hf_pull(filenames: list[str]) -> dict[str, str]:
-    """Download files from HF Hub (cached after first run). Returns {filename: local_path}."""
+def _download_to(hf_path: str, local_name: str, dest_dir: str) -> str:
+    """Download one file from HF Hub into dest_dir, return local path."""
     from huggingface_hub import hf_hub_download
-    paths = {}
-    for filename in filenames:
-        print(f"  {filename} …", end=" ", flush=True)
-        path = hf_hub_download(repo_id=_HF_REPO, filename=filename)
-        print(f"ok  →  {path}")
-        paths[filename] = path
-    return paths
+    cached = hf_hub_download(repo_id=_HF_REPO, filename=hf_path)
+    local = os.path.join(dest_dir, local_name)
+    shutil.copy(cached, local)
+    return local
 
 
 def cmd_download_demo():
     import json
-    print(f"Fetching demo data from huggingface.co/{_HF_REPO} …")
-    paths = _hf_pull(_DEMO_FILES + ["demo/params.json"])
-    phase  = paths["demo/ph_single_echo.nii.gz"]
-    mask   = paths["demo/mask_single_echo.nii.gz"]
-    with open(paths["demo/params.json"]) as f:
+    print(f"Fetching demo data from huggingface.co/{_HF_REPO} → demo/")
+    os.makedirs(_DEMO_DIR, exist_ok=True)
+
+    for hf_path in _DEMO_FILES:
+        local_name = os.path.basename(hf_path)
+        local = os.path.join(_DEMO_DIR, local_name)
+        if os.path.exists(local):
+            print(f"  {local_name} already present, skipping.")
+            continue
+        print(f"  {local_name} …", end=" ", flush=True)
+        _download_to(hf_path, local_name, _DEMO_DIR)
+        print("ok")
+
+    with open(os.path.join(_DEMO_DIR, "params.json")) as f:
         p = json.load(f)
-    te     = p["TE_seconds"]
-    vox    = p["voxel_size_mm"]
-    b0     = p["B0_Tesla"]
-    sign   = p["phase_sign_convention"]
-    eroded = p.get("eroded_rad", 3)
-    mat    = "×".join(str(x) for x in p.get("matrix_size", []))
+    te      = p["TE_seconds"]
+    vox     = p["voxel_size_mm"]
+    b0      = p["B0_Tesla"]
+    sign    = p["phase_sign_convention"]
+    eroded  = p.get("eroded_rad", 3)
+    mat     = "×".join(str(x) for x in p.get("matrix_size", []))
     te_str  = str(te) if isinstance(te, (int, float)) else " ".join(f"{v:.4g}" for v in te)
     vox_str = " ".join(str(v) for v in vox)
     print(f"""
@@ -74,8 +84,8 @@ Demo dataset: {p.get("description", "")}
 To run reconstruction on this data:
 
     python run.py \\
-        --phase  {phase} \\
-        --mask   {mask} \\
+        --phase  demo/ph_single_echo.nii.gz \\
+        --mask   demo/mask_single_echo.nii.gz \\
         --te     {te_str} \\
         --b0     {b0} \\
         --voxel-size {vox_str} \\
@@ -90,9 +100,17 @@ Or copy config.yaml, fill in the paths above, and run:
 
 
 def cmd_download_checkpoints():
-    print(f"Fetching model checkpoints from huggingface.co/{_HF_REPO} …")
-    _hf_pull(_CKPT_FILES)
-    print("\nCheckpoints cached. (Also fetched automatically on first inference.)\n")
+    print(f"Fetching model checkpoints from huggingface.co/{_HF_REPO} → checkpoints/")
+    os.makedirs(_CKPT_DIR, exist_ok=True)
+    for name in _CKPT_FILENAMES:
+        local = os.path.join(_CKPT_DIR, name)
+        if os.path.exists(local):
+            print(f"  {name} already present, skipping.")
+            continue
+        print(f"  {name} …", end=" ", flush=True)
+        _download_to(name, name, _CKPT_DIR)
+        print("ok")
+    print("\nCheckpoints downloaded. Inference will also download them automatically on first use.\n")
 
 
 # ---------------------------------------------------------------------------
@@ -131,9 +149,9 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--download-demo",        action="store_true",
-                        help="Pre-warm HF cache with demo NIfTIs and show how to run them.")
+                        help="Download demo NIfTIs into demo/ and show how to run them.")
     parser.add_argument("--download-checkpoints", action="store_true",
-                        help="Pre-warm HF cache with model checkpoints.")
+                        help="Download model checkpoints into checkpoints/.")
     parser.add_argument("--config",     metavar="FILE",
                         help="YAML config file. CLI arguments override config values.")
     parser.add_argument("--phase",      metavar="FILE",
