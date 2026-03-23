@@ -406,7 +406,7 @@ TITLE = "iQSM — Quantitative Susceptibility Mapping"
 
 
 def build_ui():
-    with gr.Blocks(title=TITLE, js=_JS) as demo:
+    with gr.Blocks(title=TITLE) as demo:
 
         # ── Header ──────────────────────────────────────────────────────
         gr.HTML("""
@@ -554,6 +554,7 @@ if __name__ == "__main__":
     demo.launch(
         theme=_THEME,
         css=_CSS,
+        js=_JS,
         server_name=args.server_name,
         server_port=args.server_port,
         show_error=True,
