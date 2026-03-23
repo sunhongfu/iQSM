@@ -40,12 +40,12 @@ class CheckpointNotFoundError(Exception):
 _CKPT_NOT_FOUND_MSG = """\
 Model weights not downloaded yet.
 
-The app needs pre-trained model files to run. \
-Download them once by running this command in the iQSM project folder:
+Click the "⬇ Download Model Weights" button in the app to download them automatically.
+If you prefer the command line, run this in the iQSM project folder:
 
     python run.py --download-checkpoints
 
-Once the download is complete, try again — no need to restart the app.\
+Once downloaded, click Run again — no need to restart the app.\
 """
 
 
