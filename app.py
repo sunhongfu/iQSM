@@ -200,8 +200,8 @@ _LFS_VMIN     = -0.05  # ppm  (LFS tissue field)
 _LFS_VMAX     =  0.05  # ppm
 
 
-def _make_slice_figure(nii_path: str, vmin: float, vmax: float) -> str:
-    """Render axial/coronal/sagittal middle slices as one combined figure; return path."""
+def _make_slice_figure(nii_path: str, vmin: float, vmax: float) -> np.ndarray:
+    """Render axial/coronal/sagittal middle slices as one combined figure; return numpy array."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -222,10 +222,13 @@ def _make_slice_figure(nii_path: str, vmin: float, vmax: float) -> str:
         ax.axis("off")
         ax.set_facecolor(bg)
     plt.subplots_adjust(left=0.01, right=0.99, top=0.92, bottom=0.01, wspace=0.04)
-    path = os.path.join(tempfile.mkdtemp(prefix="iqsm_preview_"), "preview.png")
-    fig.savefig(path, dpi=110, bbox_inches="tight", pad_inches=0.1, facecolor=bg)
+    import io
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", pad_inches=0.1, facecolor=bg)
     plt.close(fig)
-    return path
+    buf.seek(0)
+    arr = plt.imread(buf)          # float32 RGBA 0-1
+    return (arr[:, :, :3] * 255).astype(np.uint8)
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +444,7 @@ _HEAD = """<script>
     var saved = localStorage.getItem(key) || 'light';
     document.documentElement.classList.toggle('dark', saved === 'dark');
     document.addEventListener('click', function(e) {
-        var t = e.target;
+        var t = (e.composedPath && e.composedPath()[0]) || e.target;
         if (t && t.id === 'theme-toggle') {
             var next = document.documentElement.classList.contains('dark') ? 'light' : 'dark';
             document.documentElement.classList.toggle('dark', next === 'dark');
@@ -458,7 +461,7 @@ _HEAD = """<script>
             e.stopImmediatePropagation();
             return;
         }
-        var img = e.target.closest('img');
+        var img = ((e.composedPath && e.composedPath()[0]) || e.target).closest('img');
         if (!img) return;
         if (img.closest('#qsm-preview, #lfs-preview')) {
             e.preventDefault();
