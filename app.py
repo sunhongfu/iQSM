@@ -28,11 +28,6 @@ from inference import run_iqsm, CheckpointNotFoundError
 _HERE     = os.path.dirname(os.path.abspath(__file__))
 _DEMO_DIR = os.path.join(_HERE, "demo")
 
-_DEMO_FILES = [
-    "ph_single_echo.nii.gz",
-    "mask_single_echo.nii.gz",
-    "params.json",
-]
 
 _DEMO_FILES_HF = [
     "ph_single_echo.nii.gz",
@@ -57,16 +52,31 @@ def _demo_not_found_html() -> str:
     return s
 
 
+def _find_demo_nii(name: str) -> str:
+    """Return path to name (or name without .gz if macOS auto-extracted it)."""
+    p = os.path.join(_DEMO_DIR, name)
+    if os.path.exists(p):
+        return p
+    if name.endswith(".gz"):
+        p2 = os.path.join(_DEMO_DIR, name[:-3])
+        if os.path.exists(p2):
+            return p2
+    raise FileNotFoundError(name)
+
+
 def _load_demo_files() -> tuple[str, str, dict]:
     """Load demo NIfTIs + params.json; copy NIfTIs to tempdir so Gradio can serve them."""
     import json, shutil
-    missing = [f for f in _DEMO_FILES
-               if not os.path.exists(os.path.join(_DEMO_DIR, f))]
-    if missing:
+    if not os.path.exists(os.path.join(_DEMO_DIR, "params.json")):
+        raise FileNotFoundError()
+    try:
+        phase_src = _find_demo_nii("ph_single_echo.nii.gz")
+        mask_src  = _find_demo_nii("mask_single_echo.nii.gz")
+    except FileNotFoundError:
         raise FileNotFoundError()
     tmp = tempfile.mkdtemp(prefix="iqsm_demo_")
-    phase_path = shutil.copy(os.path.join(_DEMO_DIR, "ph_single_echo.nii.gz"), tmp)
-    mask_path  = shutil.copy(os.path.join(_DEMO_DIR, "mask_single_echo.nii.gz"), tmp)
+    phase_path = shutil.copy(phase_src, tmp)
+    mask_path  = shutil.copy(mask_src, tmp)
     with open(os.path.join(_DEMO_DIR, "params.json")) as f:
         params = json.load(f)
     return phase_path, mask_path, params
