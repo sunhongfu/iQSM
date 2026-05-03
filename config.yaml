@@ -1,21 +1,50 @@
 # iQSM configuration
 # Run: python run.py --config config.yaml
+# Paths can be relative (resolved against `data_dir`) or absolute.
+# `data_dir` itself is resolved against the directory holding this YAML.
 
-# --- Required ---
-phase: ph.nii.gz          # wrapped phase NIfTI (single-echo 3D)
-te: 0.020                 # echo time in seconds
+# --- Required (pick one input style) ---
+data_dir: demo
+
+# Style A: a single DICOM folder (recommended) — phase + magnitude are
+# auto-separated, TEs / voxel size / B0 read from headers.
+# dicom_dir: dicoms
+
+# Style B: pre-converted NIfTI / MAT files
+# B1. Multiple 3D phase echoes (one per file):
+# echo_files:
+#   - phase_e1.nii
+#   - phase_e2.nii
+#   - phase_e3.nii
+# te_ms: [4, 8, 12]
+
+# B2. Single 4D phase NIfTI (echoes in last dim):
+# echo_4d: phase_4d.nii.gz
+# te_ms: [4, 8, 12]
+
+# B3. Legacy single-echo input (3D phase):
+phase: ph_single_echo.nii.gz
+te_ms: [20]
 
 # --- Optional inputs ---
-mask: null                # brain mask NIfTI (null = ones)
-voxel_size: null          # [x, y, z] in mm — null reads from NIfTI header
-                          # e.g.  voxel_size: [1.0, 1.0, 1.0]
+# Magnitude NIfTI / MAT (3D or 4D). Used for mag × TE² weighted averaging
+# in multi-echo reconstruction.
+# mag: mag_4d.nii.gz
 
-# --- Acquisition ---
-b0: 3.0                   # field strength in Tesla
-phase_sign: -1            # sign convention: -1 or +1
+# Brain mask NIfTI / MAT. Omit (or set null) for an all-ones mask.
+mask: mask_single_echo.nii.gz
 
-# --- Processing ---
-eroded_rad: 3             # mask erosion radius in voxels
+# --- Acquisition / hyper-parameters ---
+b0: 3.0                      # field strength in Tesla
+voxel_size: null             # [x, y, z] mm; null reads from NIfTI header
+eroded_rad: 3                # mask erosion radius (voxels)
+reverse_phase_sign: 0        # 0 = no, 1 = yes (flip if iron-rich GM appears dark)
 
 # --- Output ---
 output: ./iqsm_output
+
+# Notes:
+#   * Checkpoints are loaded from ./checkpoints/ (download with --download-checkpoints).
+#   * Saved outputs:
+#       <output>/iQSM.nii.gz   — susceptibility (chi)
+#       <output>/iQFM.nii.gz   — tissue field (lfs)

@@ -11,5 +11,7 @@
 numpy>=1.23
 scipy>=1.10
 nibabel>=5.0
-pydicom>=2.3
+h5py>=3.8
+pydicom>=2.4
 huggingface_hub>=0.20
+pyyaml>=6.0
