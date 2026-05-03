@@ -14,9 +14,27 @@ Run:
 
 import argparse
 import os
+import tempfile
 import urllib.request
+from pathlib import Path
 
 import yaml
+
+
+def _mat_to_nii(mat_path: str) -> str:
+    """Convert a .mat file to a temporary NIfTI. Returns the temp path."""
+    import numpy as np
+    import nibabel as nib
+    import scipy.io
+    mat = scipy.io.loadmat(mat_path)
+    arrays = {k: v for k, v in mat.items()
+              if not k.startswith("_") and isinstance(v, np.ndarray) and v.ndim >= 3}
+    if not arrays:
+        raise SystemExit(f"Error: no 3D+ numeric array found in {mat_path}")
+    arr = max(arrays.values(), key=lambda a: a.size).squeeze().astype(np.float32)
+    tmp = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
+    nib.save(nib.Nifti1Image(arr, np.eye(4)), tmp.name)
+    return tmp.name
 
 _HF_REPO  = "sunhongfu/iQSM"
 _HF_BASE  = f"https://huggingface.co/{_HF_REPO}/resolve/main"
@@ -90,7 +108,7 @@ To run reconstruction on this data:
         --b0     {b0} \\
         --voxel-size {vox_str} \\
         --eroded-rad {eroded} \\
-        --phase-sign {sign} \\
+        --reverse-phase-sign {1 if sign == 1 else 0} \\
         --output ./iqsm_demo_output/
 
 Or copy config.yaml, fill in the paths above, and run:
@@ -169,8 +187,9 @@ def main():
                         help="Voxel size in mm. Reads from NIfTI header if omitted.")
     parser.add_argument("--eroded-rad", type=int, default=3, metavar="N",
                         help="Mask erosion radius in voxels.")
-    parser.add_argument("--phase-sign", type=int, choices=[-1, 1], default=-1,
-                        help="Phase sign convention: -1 (default) or +1.")
+    parser.add_argument("--reverse-phase-sign", type=int, choices=[0, 1], default=0,
+                        help="Reverse the phase sign: 0 = no (default), 1 = yes. "
+                             "Set to 1 if iron-rich deep grey matter appears dark (rather than bright) in the QSM output.")
     parser.set_defaults(**config)
     args = parser.parse_args()
 
@@ -181,6 +200,16 @@ def main():
     if args.te <= 0:
         parser.error("--te must be positive (value in seconds, e.g. 0.020).")
 
+    if Path(args.phase).suffix.lower() == ".mat":
+        print(f"Converting phase .mat → NIfTI …")
+        args.phase = _mat_to_nii(args.phase)
+        if args.voxel_size is None:
+            args.voxel_size = [1.0, 1.0, 1.0]
+            print("Note: no --voxel-size given for .mat input — defaulting to 1×1×1 mm")
+    if args.mask and Path(args.mask).suffix.lower() == ".mat":
+        print(f"Converting mask .mat → NIfTI …")
+        args.mask = _mat_to_nii(args.mask)
+
     from inference import run_iqsm, CheckpointNotFoundError
     try:
         qsm_path, lfs_path = run_iqsm(
@@ -190,7 +219,7 @@ def main():
             voxel_size=args.voxel_size,
             b0=args.b0,
             eroded_rad=args.eroded_rad,
-            phase_sign=args.phase_sign,
+            phase_sign=(1 if args.reverse_phase_sign else -1),
             output_dir=args.output,
         )
     except CheckpointNotFoundError as exc:

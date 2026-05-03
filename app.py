@@ -4,591 +4,837 @@ iQSM – Gradio Web Interface
 Launch:
     python app.py                   # CPU
     python app.py --server-port 8080
-
-Docker:
-    docker compose up               # see docker-compose.yml
 """
 
-import argparse
-import os
 import re
+import sys
+import queue
+import shutil
 import tempfile
-import traceback
+import threading
+from functools import lru_cache
+from pathlib import Path
 
-import gradio as gr
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
+import gradio as gr
+
+REPO_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from inference import run_iqsm, CheckpointNotFoundError
 
+_pipeline_lock = threading.Lock()
 
-# ---------------------------------------------------------------------------
-# Demo data – single-echo in-vivo brain, 1×1×1 mm, B0=3T, TE=20ms
-# ---------------------------------------------------------------------------
-_HERE     = os.path.dirname(os.path.abspath(__file__))
-_DEMO_DIR = os.path.join(_HERE, "demo")
-
-
-_DEMO_FILES_HF = [
-    "ph_single_echo.nii.gz",
-    "mask_single_echo.nii.gz",
-    "params.json",
-]
-_DEMO_HF_BASE = "https://huggingface.co/sunhongfu/iQSM/resolve/main/demo"
-
-def _demo_not_found_html() -> str:
-    s = '<div style="color:#dc2626;font-size:0.875rem;line-height:1.6">'
-    s += '<p style="font-weight:700;margin:0 0 6px">⚠ Demo data not found in <code>demo/</code></p>'
-    s += '<p style="margin:0 0 4px"><strong>Option A — Python (run on the host, not inside Docker):</strong></p>'
-    s += '<pre style="background:#fef2f2;padding:6px 10px;border-radius:4px;margin:0 0 10px;font-size:0.8rem">python run.py --download-demo</pre>'
-    s += '<p style="margin:0 0 4px"><strong>Option B — Manual download (no Python needed):</strong></p>'
-    s += '<p style="margin:0 0 4px">Download all three files and place them in the <code>demo/</code> folder:</p>'
-    s += '<ul style="margin:0 0 10px;padding-left:18px">'
-    for f in _DEMO_FILES_HF:
-        s += f'<li><a href="{_DEMO_HF_BASE}/{f}?download=true" target="_blank" style="color:#dc2626">{f}</a></li>'
-    s += '</ul>'
-    s += '<p style="margin:0">Then click <strong>⬇ Load Demo Data</strong> again — no Docker restart needed.</p>'
-    s += '</div>'
-    return s
-
-
-def _find_demo_nii(name: str) -> str:
-    """Return path to name (or name without .gz if macOS auto-extracted it)."""
-    p = os.path.join(_DEMO_DIR, name)
-    if os.path.exists(p):
-        return p
-    if name.endswith(".gz"):
-        p2 = os.path.join(_DEMO_DIR, name[:-3])
-        if os.path.exists(p2):
-            return p2
-    raise FileNotFoundError(name)
-
-
-def _load_demo_files() -> tuple[str, str, dict]:
-    """Load demo NIfTIs + params.json from local demo/ folder."""
-    import json
-    if not os.path.exists(os.path.join(_DEMO_DIR, "params.json")):
-        raise FileNotFoundError()
-    phase_path = _find_demo_nii("ph_single_echo.nii.gz")
-    mask_path  = _find_demo_nii("mask_single_echo.nii.gz")
-    with open(os.path.join(_DEMO_DIR, "params.json")) as f:
-        params = json.load(f)
-    return phase_path, mask_path, params
-
-
-def load_demo_data():
-    """Load demo files and populate all input fields. Does not run reconstruction."""
-    _no_change = (gr.update(),) * 8  # phase, mask, te, vox, b0, eroded, negate, demo_info
-    try:
-        phase_path, mask_path, params = _load_demo_files()
-    except FileNotFoundError:
-        return (*_no_change, _demo_not_found_html())
-    except Exception as exc:
-        err = f'<p style="color:#dc2626;font-size:0.875rem">⚠ Error loading demo: {exc}</p>'
-        return (*_no_change, err)
-
-    try:
-        te       = params["TE_seconds"]
-        te_str   = str(te) if isinstance(te, (int, float)) else ", ".join(f"{v:.4g}" for v in te)
-        vox      = params["voxel_size_mm"]
-        vox_str  = " ".join(f"{v:.4g}" for v in vox)
-        b0       = params["B0_Tesla"]
-        eroded   = params.get("eroded_rad", 3)
-        negate   = params["phase_sign_convention"] == 1
-        mat      = params.get("matrix_size", "")
-        mat_str  = "×".join(str(x) for x in mat) if mat else ""
-    except Exception as exc:
-        err = f'<p style="color:#dc2626;font-size:0.875rem">⚠ Error reading demo params: {exc}</p>'
-        return (*_no_change, err)
-
-    demo_info = (
-        f"demo/ph_single_echo.nii.gz   (phase)\n"
-        f"demo/mask_single_echo.nii.gz (mask)\n"
-        f"Matrix: {mat_str} · Voxel: {vox_str} mm · TE: {te_str} s · B0: {b0} T\n"
-        f"Ready — click ▶ Run Reconstruction to proceed."
-    )
-
-    return (
-        phase_path, mask_path,
-        te_str, vox_str,
-        b0, eroded, negate,
-        gr.update(value=demo_info, visible=True),
-        "",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Metadata extraction from uploaded NIfTI
-# ---------------------------------------------------------------------------
-
-def extract_nii_metadata(file_obj):
-    if file_obj is None:
-        return gr.update(), gr.update(), gr.update()
-    try:
-        img = nib.load(file_obj.name)
-        zooms = img.header.get_zooms()
-        voxel_str = f"{zooms[0]:.4g} {zooms[1]:.4g} {zooms[2]:.4g}"
-
-        te_update = gr.update()
-        try:
-            descrip = img.header.get("descrip", b"")
-            if isinstance(descrip, (bytes, bytearray)):
-                descrip = descrip.decode("utf-8", errors="ignore")
-            m = re.search(r"TE\s*=\s*([\d.]+)\s*(ms)?", descrip.strip(), re.IGNORECASE)
-            if m:
-                te_val = float(m.group(1))
-                if m.group(2) and m.group(2).lower() == "ms":
-                    te_val /= 1000.0
-                te_update = gr.update(value=str(te_val))
-        except Exception:
-            pass
-
-        return te_update, gr.update(value=voxel_str), gr.update()
-    except Exception:
-        return gr.update(), gr.update(), gr.update()
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _parse_floats(text: str, name: str, n: int | None = None) -> list[float]:
-    try:
-        vals = [float(v) for v in text.replace(",", " ").split()]
-    except ValueError:
-        raise gr.Error(f"'{name}' must be numbers separated by spaces or commas.")
-    if n is not None and len(vals) != n:
-        raise gr.Error(f"'{name}' must have exactly {n} values, got {len(vals)}.")
-    return vals
-
-
-def _status_html(msg: str, ok: bool = True) -> str:
-    import html as _html
-    color = "#16a34a" if ok else "#dc2626"
-    if ok:
-        return f'<p style="color:{color};font-weight:600;margin:0">{_html.escape(msg)}</p>'
-    return f'<pre style="color:{color};font-weight:600;margin:0;white-space:pre-wrap;font-family:inherit;font-size:0.875rem">{_html.escape(msg)}</pre>'
-
-
-_HF_BASE = "https://huggingface.co/sunhongfu/iQSM/resolve/main"
-_CKPT_FILES = [
-    "iQSM_50_v2.pth",
-    "LPLayer_chi_50_v2.pth",
-    "iQFM_40_v2.pth",
-    "LoTLayer_lfs_40_v2.pth",
-]
-
-def _ckpt_not_found_html() -> str:
-    s = '<div style="color:#dc2626;font-size:0.875rem;line-height:1.6">'
-    s += '<p style="font-weight:700;margin:0 0 6px">⚠ Model weights not found in <code>checkpoints/</code></p>'
-    s += '<p style="margin:0 0 4px"><strong>Option A — Python (run on the host, not inside Docker):</strong></p>'
-    s += '<pre style="background:#fef2f2;padding:6px 10px;border-radius:4px;margin:0 0 10px;font-size:0.8rem">python run.py --download-checkpoints</pre>'
-    s += '<p style="margin:0 0 4px"><strong>Option B — Manual download (no Python needed):</strong></p>'
-    s += '<p style="margin:0 0 4px">Download all four files and place them in the <code>checkpoints/</code> folder:</p>'
-    s += '<ul style="margin:0 0 10px;padding-left:18px">'
-    for f in _CKPT_FILES:
-        s += f'<li><a href="{_HF_BASE}/{f}?download=true" target="_blank" style="color:#dc2626">{f}</a></li>'
-    s += '</ul>'
-    s += '<p style="margin:0">Then click <strong>▶ Run Reconstruction</strong> again — no Docker restart needed.</p>'
-    s += '</div>'
-    return s
-
+_HERE     = REPO_ROOT
+_DEMO_DIR = _HERE / "demo"
 
 _DISPLAY_VMIN = -0.2   # ppm  (QSM)
-_DISPLAY_VMAX =  0.2   # ppm
+_DISPLAY_VMAX =  0.2
 _LFS_VMIN     = -0.05  # ppm  (LFS tissue field)
-_LFS_VMAX     =  0.05  # ppm
-
-
-def _make_slice_figure(nii_path: str, vmin: float, vmax: float):
-    """Render axial/coronal/sagittal middle slices; return matplotlib Figure."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    vol = nib.load(nii_path).get_fdata(dtype=np.float32)
-    slices = [
-        (vol[:, :, vol.shape[2] // 2].T, "Axial"),
-        (vol[:, vol.shape[1] // 2, :].T, "Coronal"),
-        (vol[vol.shape[0] // 2, :, :].T, "Sagittal"),
-    ]
-
-    bg = "#111827"
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-    fig.patch.set_facecolor(bg)
-    for ax, (sl, label) in zip(axes, slices):
-        ax.imshow(sl, cmap="gray", origin="lower", aspect="equal", vmin=vmin, vmax=vmax)
-        ax.set_title(label, color="white", fontsize=11, pad=5)
-        ax.axis("off")
-        ax.set_facecolor(bg)
-    plt.subplots_adjust(left=0.01, right=0.99, top=0.92, bottom=0.01, wspace=0.04)
-    return fig
+_LFS_VMAX     =  0.05
 
 
 # ---------------------------------------------------------------------------
-# Core reconstruction callback
+# Streaming log writer
 # ---------------------------------------------------------------------------
 
-def reconstruct(
-    phase_file,
-    te_str,
-    mask_file,
-    voxel_str,
-    b0_val,
-    eroded_rad,
-    negate_phase,
-    progress=gr.Progress(track_tqdm=True),
-):
-    if phase_file is None:
-        raise gr.Error("Please upload a phase NIfTI file.")
-    if not te_str.strip():
-        raise gr.Error("Please enter the echo time (TE).")
+class _QueueWriter:
+    def __init__(self, q, orig):
+        self._q = q
+        self._orig = orig
 
-    te_vals = _parse_floats(te_str, "Echo time (TE)", n=1)
-    te = te_vals[0]
-    if te <= 0:
-        raise gr.Error("Echo time must be positive (enter seconds, e.g. 0.020).")
+    def write(self, text):
+        if text.strip():
+            self._q.put(text.rstrip())
+        if self._orig:
+            self._orig.write(text)
+        return len(text)
 
+    def flush(self):
+        if self._orig:
+            self._orig.flush()
+
+    def isatty(self):
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Path / file helpers
+# ---------------------------------------------------------------------------
+
+def _natural_key(f):
+    return [int(c) if c.isdigit() else c.lower()
+            for c in re.split(r"(\d+)", _to_path(f).name)]
+
+
+def _to_path(f):
+    if f is None:
+        return None
+    if isinstance(f, str):
+        return Path(f)
+    if hasattr(f, "path"):
+        return Path(f.path)
+    if hasattr(f, "name"):
+        return Path(f.name)
+    return Path(str(f))
+
+
+def _mat_to_nii(mat_path: str) -> str:
+    """Load a single-array .mat file and save as a temporary NIfTI. Returns path."""
+    import scipy.io
+    mat = scipy.io.loadmat(mat_path)
+    arrays = {k: v for k, v in mat.items()
+              if not k.startswith("_") and isinstance(v, np.ndarray) and v.ndim >= 3}
+    if not arrays:
+        raise ValueError(f"No 3D+ numeric array found in {mat_path}")
+    arr = max(arrays.values(), key=lambda a: a.size).squeeze().astype(np.float32)
+    tmp = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
+    nib.save(nib.Nifti1Image(arr, np.eye(4)), tmp.name)
+    return tmp.name
+
+
+def _detect_echoes(paths):
+    """Return echo count: reads 4D shape for a single NIfTI, else len(paths)."""
+    if not paths:
+        return None
+    paths = [p for p in paths if p]
+    if len(paths) == 1:
+        p = Path(paths[0])
+        name = p.name.lower()
+        if name.endswith(".nii") or name.endswith(".nii.gz"):
+            try:
+                shape = nib.load(str(p)).shape
+                if len(shape) == 4:
+                    return int(shape[-1])
+            except Exception:
+                pass
+        return 1
+    return len(paths)
+
+
+def _format_order(paths):
+    paths = [p for p in paths if p]
+    if not paths:
+        return ""
+    sorted_paths = sorted(paths, key=_natural_key)
+    entries = [f"{i+1}. {Path(p).name}" for i, p in enumerate(sorted_paths)]
+    n_cols = 4 if len(entries) > 5 else 1
+    col_width = max(len(e) for e in entries) + 3
+    rows = []
+    for i in range(0, len(entries), n_cols):
+        chunk = entries[i:i + n_cols]
+        rows.append("".join(e.ljust(col_width) for e in chunk).rstrip())
+    return "\n".join(rows)
+
+
+# ---------------------------------------------------------------------------
+# Slice viewer helpers
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=8)
+def _volume_array(nii_path):
+    return nib.load(str(nii_path)).get_fdata().astype(np.float32)
+
+
+def _make_slice_image(nii_path, slice_idx=None, vmin=-0.2, vmax=0.2):
+    data = _volume_array(str(nii_path))
+    depth = data.shape[2]
+    if slice_idx is None:
+        slice_idx = depth // 2
+    slice_idx = max(0, min(int(slice_idx), depth - 1))
+    sl = np.rot90(data[:, :, slice_idx])
+    fig, ax = plt.subplots(figsize=(4, 4), facecolor="black")
+    ax.imshow(sl, cmap="gray", vmin=float(vmin), vmax=float(vmax), aspect="equal")
+    ax.axis("off")
+    fig.tight_layout(pad=0)
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    fig.savefig(tmp.name, bbox_inches="tight", pad_inches=0, dpi=150, facecolor="black")
+    plt.close(fig)
+    return tmp.name
+
+
+# ---------------------------------------------------------------------------
+# Run configuration log block
+# ---------------------------------------------------------------------------
+
+def _print_run_config(work_dir, mode, phase_paths, te_list_ms, mag_path, mask_path,
+                      voxel_size, voxel_user_set, b0, eroded_rad, phase_sign,
+                      orig_phase_paths=None, orig_mag_path=None, orig_mask_path=None):
+    print("============================")
+    print("RUN CONFIGURATION")
+    print("============================")
+    if mode == "4d":
+        print(f"Input mode      : Single 4D volume ({len(te_list_ms)} echoes)")
+        print(f"Phase file      : {Path(phase_paths[0]).name}")
+    elif len(phase_paths) == 1:
+        print(f"Input mode      : Single 3D phase")
+        print(f"Phase file      : {Path(phase_paths[0]).name}")
+    else:
+        print(f"Input mode      : Multiple 3D echoes ({len(phase_paths)} files)")
+        print("Phase files (in processing order):")
+        for i, (p, te) in enumerate(zip(phase_paths, te_list_ms), 1):
+            print(f"  {i}. {Path(p).name}    TE = {te} ms")
+    print(f"TE values (ms)  : {', '.join(str(t) for t in te_list_ms)}")
+    print(f"Magnitude       : {Path(mag_path).name if mag_path else '(none)'}")
+    print(f"Brain mask      : {Path(mask_path).name if mask_path else '(none)'}")
+    if voxel_size and voxel_user_set:
+        print(f"Voxel size (mm) : {' '.join(f'{v:.4g}' for v in voxel_size)}  (user-specified)")
+    elif voxel_size:
+        print(f"Voxel size (mm) : {' '.join(f'{v:.4g}' for v in voxel_size)}  (default for .mat input)")
+    else:
+        print(f"Voxel size (mm) : (from NIfTI header)")
+    print(f"B0 (T)          : {b0}")
+    print(f"Mask erosion    : {eroded_rad} voxels")
+    print(f"Reverse phase   : {'yes' if phase_sign == 1 else 'no (default)'}")
+    print(f"Staging dir     : {work_dir}")
+    if len(phase_paths) == 1:
+        cmd = ["python run.py"]
+        phase_cli = orig_phase_paths[0] if orig_phase_paths else str(phase_paths[0])
+        cmd.append(f"--phase {phase_cli}")
+        cmd.append(f"--te {te_list_ms[0] / 1000:.6g}")
+        if mask_path:
+            mask_cli = orig_mask_path if orig_mask_path else str(mask_path)
+            cmd.append(f"--mask {mask_cli}")
+        if voxel_user_set and voxel_size:
+            cmd.append("--voxel-size " + " ".join(f"{v:.4g}" for v in voxel_size))
+        if b0 != 3.0:
+            cmd.append(f"--b0 {b0}")
+        if eroded_rad != 3:
+            cmd.append(f"--eroded-rad {eroded_rad}")
+        if phase_sign != -1:
+            cmd.append("--reverse-phase-sign 1")
+        _sep = "-" * 56
+        print()
+        print(_sep)
+        print("  Equivalent command-line invocation:")
+        print(_sep)
+        print("  " + " \\\n      ".join(cmd))
+        print(_sep)
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Background inference thread
+# ---------------------------------------------------------------------------
+
+def _run_thread(job, work_dir, mode, phase_paths, te_list_ms, mag_path, mask_path,
+                voxel_size, voxel_user_set, b0, eroded_rad, phase_sign, vmin, vmax, lfs_vmin, lfs_vmax,
+                orig_phase_paths=None, orig_mag_path=None, orig_mask_path=None):
+    log_q = job["log_queue"]
+    orig = sys.stdout
+    sys.stdout = _QueueWriter(log_q, orig)
+    try:
+        with _pipeline_lock:
+            job["status"] = "running"
+            te_list_s = [t / 1000.0 for t in te_list_ms]
+
+            _print_run_config(work_dir, mode, phase_paths, te_list_ms, mag_path, mask_path,
+                              voxel_size, voxel_user_set, b0, eroded_rad, phase_sign,
+                              orig_phase_paths=orig_phase_paths, orig_mag_path=orig_mag_path,
+                              orig_mask_path=orig_mask_path)
+
+            # Expand 4D NIfTI into individual 3D volumes
+            if mode == "4d":
+                print("============================")
+                print("EXTRACTING 4D VOLUMES")
+                print("============================")
+                img_4d = nib.load(str(phase_paths[0]))
+                data_4d = img_4d.get_fdata(dtype=np.float32)
+                echo_paths = []
+                for i in range(data_4d.shape[3]):
+                    p = work_dir / f"phase_echo{i+1}.nii.gz"
+                    nib.save(nib.Nifti1Image(data_4d[:, :, :, i], img_4d.affine), str(p))
+                    echo_paths.append(p)
+                    print(f"  Echo {i+1}: TE = {te_list_ms[i]} ms")
+                phase_paths = echo_paths
+
+            out_dir = work_dir / "iqsm_output"
+            out_dir.mkdir(exist_ok=True)
+
+            if len(phase_paths) == 1:
+                # ── Single echo ──────────────────────────────────────
+                print("============================")
+                print("RECONSTRUCTION")
+                print("============================")
+                qsm_path, lfs_path = run_iqsm(
+                    phase_nii_path=str(phase_paths[0]),
+                    te=te_list_s[0],
+                    mask_nii_path=mask_path,
+                    voxel_size=voxel_size,
+                    b0=b0,
+                    eroded_rad=eroded_rad,
+                    phase_sign=phase_sign,
+                    output_dir=str(out_dir),
+                )
+            else:
+                # ── Multi-echo: reconstruct each echo and average ────
+                print("============================")
+                print(f"MULTI-ECHO RECONSTRUCTION ({len(phase_paths)} echoes)")
+                print("============================")
+                qsm_maps, lfs_maps, affine = [], [], None
+                for i, (ppath, te_s) in enumerate(zip(phase_paths, te_list_s)):
+                    print(f"\nEcho {i+1}/{len(phase_paths)}  (TE = {te_list_ms[i]} ms)")
+                    echo_out = work_dir / f"echo{i+1}_output"
+                    q_path, l_path = run_iqsm(
+                        phase_nii_path=str(ppath),
+                        te=te_s,
+                        mask_nii_path=mask_path,
+                        voxel_size=voxel_size,
+                        b0=b0,
+                        eroded_rad=eroded_rad,
+                        phase_sign=phase_sign,
+                        output_dir=str(echo_out),
+                    )
+                    q_img = nib.load(q_path)
+                    if affine is None:
+                        affine = q_img.affine
+                    qsm_maps.append(q_img.get_fdata(dtype=np.float32))
+                    lfs_maps.append(nib.load(l_path).get_fdata(dtype=np.float32))
+
+                print(f"\nAveraging {len(qsm_maps)} echo results …")
+                qsm_stack = np.stack(qsm_maps, axis=-1)
+                lfs_stack = np.stack(lfs_maps, axis=-1)
+                if mag_path:
+                    print("  Using magnitude-weighted TE averaging …")
+                    mag_data = nib.load(mag_path).get_fdata(dtype=np.float32)
+                    if mag_data.ndim == 3:
+                        mag_data = mag_data[:, :, :, np.newaxis]
+                    te_bc = np.array(te_list_s, dtype=np.float32).reshape(1, 1, 1, -1)
+                    weights = (mag_data * te_bc) ** 2
+                    denom = weights.sum(axis=-1, keepdims=True)
+                    denom[denom == 0] = 1.0
+                    qsm_avg = (weights * qsm_stack).sum(axis=-1) / denom.squeeze(-1)
+                    lfs_avg = (weights * lfs_stack).sum(axis=-1) / denom.squeeze(-1)
+                else:
+                    print("  Using simple average (no magnitude provided) …")
+                    qsm_avg = np.mean(qsm_stack, axis=-1)
+                    lfs_avg = np.mean(lfs_stack, axis=-1)
+                qsm_path = str(out_dir / "iQSM.nii.gz")
+                lfs_path = str(out_dir / "iQFM.nii.gz")
+                nib.save(nib.Nifti1Image(qsm_avg.astype(np.float32), affine), qsm_path)
+                nib.save(nib.Nifti1Image(lfs_avg.astype(np.float32), affine), lfs_path)
+
+            print("\n✅ Pipeline complete!")
+            job["status"] = "done"
+            job["qsm_path"] = qsm_path
+            job["lfs_path"] = lfs_path
+            job["depth"] = _volume_array(qsm_path).shape[2]
+            job["qsm_image"] = _make_slice_image(qsm_path, vmin=vmin, vmax=vmax)
+            job["lfs_image"] = _make_slice_image(lfs_path, vmin=lfs_vmin, vmax=lfs_vmax)
+
+    except Exception as exc:
+        import traceback
+        print(f"\n❌ Error: {exc}")
+        print(traceback.format_exc())
+        job["status"] = "error"
+    finally:
+        sys.stdout = orig
+        log_q.put(None)
+
+
+def _result_files(job):
+    files = [p for p in (job.get("qsm_path"), job.get("lfs_path")) if p]
+    return files or None
+
+
+def _state_and_slider_update(job):
+    state = (job.get("qsm_path"), job.get("lfs_path"))
+    depth = job.get("depth")
+    if depth and not job.get("_slider_init"):
+        job["_slider_init"] = True
+        slider = gr.update(visible=True, minimum=0, maximum=depth - 1,
+                           value=depth // 2, interactive=True)
+    else:
+        slider = gr.update()
+    return state, slider
+
+
+def _stream_job(job):
+    log = ""
+    while True:
+        msg = job["log_queue"].get()
+        if msg is None:
+            break
+        log += msg + "\n"
+        state, slider = _state_and_slider_update(job)
+        yield (log, _result_files(job), job.get("qsm_image"),
+               job.get("lfs_image"), state, slider)
+    state, slider = _state_and_slider_update(job)
+    yield (log, _result_files(job), job.get("qsm_image"),
+           job.get("lfs_image"), state, slider)
+
+
+# ---------------------------------------------------------------------------
+# Main pipeline callback
+# ---------------------------------------------------------------------------
+
+def run_pipeline(phase_files, te_ms_str, mag_file, mask_file, voxel_str, b0_val,
+                 eroded_rad, negate_phase, vmin, vmax, lfs_vmin, lfs_vmax,
+                 mag_orig_path=None, mask_orig_path=None):
+    _noop = (None, None, None, (None, None), gr.update())
+
+    te_list_ms = [float(t.strip()) for t in te_ms_str.replace(",", " ").split() if t.strip()]
+    if not te_list_ms:
+        yield ("❌ Enter echo times (ms)", *_noop)
+        return
+
+    if not phase_files:
+        yield ("❌ Upload phase file(s) — a single 3D/4D NIfTI/MAT or multiple 3D echoes", *_noop)
+        return
+
+    files = sorted(phase_files if isinstance(phase_files, list) else [phase_files],
+                   key=_natural_key)
+    missing = [str(_to_path(f)) for f in files
+               if not (_to_path(f) and _to_path(f).exists())]
+    if missing:
+        yield ("❌ Some uploaded files no longer exist. Click 'Clear All' and re-upload:\n  "
+               + "\n  ".join(missing), *_noop)
+        return
+
+    # Determine mode
+    paths_str = [str(_to_path(f)) for f in files]
+    n_echoes_detected = _detect_echoes(paths_str)
+    if len(files) == 1 and n_echoes_detected and n_echoes_detected > 1:
+        mode = "4d"
+        n_phase_echoes = n_echoes_detected
+    else:
+        mode = "multi" if len(files) > 1 else "single"
+        n_phase_echoes = len(files)
+
+    if n_phase_echoes != len(te_list_ms):
+        yield (f"❌ {n_phase_echoes} echo(es) but {len(te_list_ms)} TE value(s) — counts must match",
+               *_noop)
+        return
+
+    work_dir = Path(tempfile.mkdtemp(prefix="iqsm_"))
+
+    orig_phase_paths = [str(_to_path(f)) for f in files]
+    _omag = _to_path(mag_file)
+    orig_mag_path = mag_orig_path or (str(_omag) if _omag and _omag.exists() else None)
+    _omask = _to_path(mask_file)
+    orig_mask_path = mask_orig_path or (str(_omask) if _omask and _omask.exists() else None)
+
+    # Stage phase files (convert .mat → NIfTI if needed)
+    phase_paths = []
+    for f in files:
+        src = _to_path(f)
+        if src.suffix.lower() == ".mat":
+            nii = _mat_to_nii(str(src))
+            dst = work_dir / (src.stem + ".nii.gz")
+            shutil.move(nii, dst)
+        else:
+            dst = work_dir / src.name
+            shutil.copy(src, dst)
+        phase_paths.append(dst)
+
+    # Stage magnitude (convert .mat → NIfTI if needed)
+    mag_path = None
+    if mag_file:
+        src = _to_path(mag_file)
+        if src and src.exists():
+            if src.suffix.lower() == ".mat":
+                nii = _mat_to_nii(str(src))
+                dst = work_dir / (src.stem + "_mag.nii.gz")
+                shutil.move(nii, dst)
+            else:
+                dst = work_dir / src.name
+                shutil.copy(src, dst)
+            mag_path = str(dst)
+
+    # Stage mask (convert .mat → NIfTI if needed)
+    mask_path = None
+    if mask_file:
+        src = _to_path(mask_file)
+        if src and src.exists():
+            if src.suffix.lower() == ".mat":
+                nii = _mat_to_nii(str(src))
+                dst = work_dir / (src.stem + "_mask.nii.gz")
+                shutil.move(nii, dst)
+            else:
+                dst = work_dir / src.name
+                shutil.copy(src, dst)
+            mask_path = str(dst)
+
+    # Voxel size
     voxel_size = None
-    if voxel_str.strip():
-        voxel_size = _parse_floats(voxel_str, "Voxel size", n=3)
-        if any(v <= 0 for v in voxel_size):
-            raise gr.Error("Voxel sizes must be positive.")
+    voxel_user_set = False
+    if voxel_str and voxel_str.strip():
+        try:
+            voxel_size = [float(v) for v in voxel_str.replace(",", " ").split()]
+        except ValueError:
+            yield ("❌ Invalid voxel size — enter three numbers, e.g. 1 1 2", *_noop)
+            return
+        if len(voxel_size) != 3:
+            yield ("❌ Voxel size must have exactly 3 values (x y z)", *_noop)
+            return
+        voxel_user_set = True
+    elif all(_to_path(f).suffix.lower() == ".mat" for f in files):
+        voxel_size = [1.0, 1.0, 1.0]
 
     phase_sign = 1 if negate_phase else -1
-    output_dir = tempfile.mkdtemp(prefix="iqsm_out_")
+    log_q: queue.Queue = queue.Queue()
+    job = {"status": "queued", "log_queue": log_q}
+    threading.Thread(
+        target=_run_thread,
+        args=(job, work_dir, mode, phase_paths, te_list_ms, mag_path, mask_path,
+              voxel_size, voxel_user_set, float(b0_val), int(eroded_rad), phase_sign,
+              float(vmin), float(vmax), float(lfs_vmin), float(lfs_vmax),
+              orig_phase_paths, orig_mag_path, orig_mask_path),
+        daemon=True,
+    ).start()
 
-    def _progress(frac, msg):
-        progress(frac, desc=msg)
+    yield from _stream_job(job)
 
+
+# ---------------------------------------------------------------------------
+# Demo loader
+# ---------------------------------------------------------------------------
+
+def load_demo():
+    if not (_DEMO_DIR / "ph_single_echo.nii.gz").exists():
+        return ([], "❌ Demo data not found.\nRun: python run.py --download-demo",
+                None, None, None, "", None, None, gr.update(), gr.update(), gr.update(), gr.update(), None, None)
+    paths = [str(_DEMO_DIR / "ph_single_echo.nii.gz")]
+    mask = _DEMO_DIR / "mask_single_echo.nii.gz"
+    mask_path = str(mask) if mask.exists() else None
+    te_ms_val     = "20"
+    voxel_update  = gr.update()
+    b0_update     = gr.update()
+    eroded_update = gr.update()
+    negate_update = gr.update()
     try:
-        qsm_path, lfs_path = run_iqsm(
-            phase_nii_path=phase_file if isinstance(phase_file, str) else phase_file.name,
-            te=te,
-            mask_nii_path=(mask_file if isinstance(mask_file, str) else mask_file.name) if mask_file else None,
-            voxel_size=voxel_size,
-            b0=float(b0_val),
-            eroded_rad=int(eroded_rad),
-            phase_sign=phase_sign,
-            output_dir=output_dir,
-            progress_fn=_progress,
-        )
-    except CheckpointNotFoundError:
-        return _ckpt_not_found_html(), None, None, None, None
+        import json
+        with open(_DEMO_DIR / "params.json") as fh:
+            params = json.load(fh)
+        te_s = params.get("TE_seconds", 0.020)
+        if isinstance(te_s, (int, float)):
+            te_ms_val = f"{te_s * 1000:.4g}"
+        vox = params.get("voxel_size_mm")
+        if vox:
+            voxel_update = gr.update(value=" ".join(f"{v:.4g}" for v in vox))
+        b0 = params.get("B0_Tesla")
+        if b0 is not None:
+            b0_update = gr.update(value=float(b0))
+        er = params.get("eroded_rad")
+        if er is not None:
+            eroded_update = gr.update(value=int(er))
+        pc = params.get("phase_sign_convention")
+        if pc is not None:
+            negate_update = gr.update(value=(pc == 1))
     except Exception:
-        tb = traceback.format_exc()
-        print(tb, flush=True)
-        return _status_html("Reconstruction failed — check the terminal / Docker log for the full error.", ok=False), None, None, None, None
+        pass
+    return (paths, _format_order(paths), 1, float(te_ms_val), None, te_ms_val,
+            None, mask_path, voxel_update, b0_update, eroded_update, negate_update, None, mask_path)
 
-    try:
-        qsm_img = _make_slice_figure(qsm_path, _DISPLAY_VMIN, _DISPLAY_VMAX)
-        lfs_img = _make_slice_figure(lfs_path, _LFS_VMIN, _LFS_VMAX)
-    except Exception:
-        tb = traceback.format_exc()
-        print(tb, flush=True)
-        return _status_html("✅ Done — but preview failed (see log).\n" + tb, ok=False), qsm_path, lfs_path, None, None
 
-    return _status_html("✅ Done — download QSM and LFS files below."), qsm_path, lfs_path, qsm_img, lfs_img
+# ---------------------------------------------------------------------------
+# CSS / JS
+# ---------------------------------------------------------------------------
+
+CUSTOM_CSS = """
+/* Section titles — coloured for quick scanning */
+.gradio-container h3 {
+    padding-left: 12px !important;
+    color: #1d4ed8 !important;
+    border-left: 4px solid #1d4ed8 !important;
+    margin-left: 4px !important;
+}
+.dark .gradio-container h3 {
+    color: #60a5fa !important;
+    border-left-color: #60a5fa !important;
+}
+
+/* Section panels — thicker, more visible borders */
+.dr-section {
+    margin-bottom: 16px !important;
+    border: 2px solid #4b5563 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+    overflow: hidden !important;
+}
+.dark .dr-section {
+    border-color: #9ca3af !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.30) !important;
+}
+
+/* Secondary buttons */
+button.secondary {
+    background: #f3f4f6 !important;
+    border: 1px solid #9ca3af !important;
+    color: #111827 !important;
+    font-weight: 600 !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+    transition: background 0.12s ease-in-out, border-color 0.12s ease-in-out !important;
+}
+button.secondary:hover {
+    background: #e5e7eb !important;
+    border-color: #6b7280 !important;
+}
+button.secondary:active {
+    background: #d1d5db !important;
+}
+.dark button.secondary {
+    background: #374151 !important;
+    border: 1px solid #6b7280 !important;
+    color: #f3f4f6 !important;
+}
+.dark button.secondary:hover {
+    background: #4b5563 !important;
+    border-color: #9ca3af !important;
+    color: #ffffff !important;
+}
+.dark button.secondary:active {
+    background: #1f2937 !important;
+}
+"""
+
+FORCE_DARK_JS = """
+<script>
+  (function() {
+    try {
+      var url = new URL(window.location.href);
+      if (url.searchParams.get('__theme') !== 'dark') {
+        url.searchParams.set('__theme', 'dark');
+        window.location.replace(url.toString());
+      }
+    } catch (e) {}
+  })();
+</script>
+"""
 
 
 # ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 
-_CSS = """
-/* ── Typography ──────────────────────────────────────────────── */
-.gradio-container {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
-                 Roboto, "Helvetica Neue", Arial, sans-serif !important;
-    max-width: 1280px !important;
-    margin: 0 auto !important;
-}
+with gr.Blocks(title="iQSM") as app:
+    gr.HTML(f"<style>{CUSTOM_CSS}</style>{FORCE_DARK_JS}", padding=False)
+    gr.Markdown(
+        "# iQSM — Instant Quantitative Susceptibility Mapping\n"
+        "<span style='font-size: 1.2em'>"
+        "🐙 [GitHub](https://github.com/sunhongfu/iQSM)"
+        " &nbsp;·&nbsp; "
+        "📄 [Paper (NeuroImage)](https://www.sciencedirect.com/science/article/pii/S1053811922005274)"
+        " &nbsp;·&nbsp; "
+        "🌐 [Hongfu Sun](https://sunhongfu.github.io)"
+        "</span>"
+    )
 
-/* ── App header ──────────────────────────────────────────────── */
-.app-header {
-    background: linear-gradient(135deg, #0c2340 0%, #1a4f8a 55%, #2471b5 100%);
-    border-radius: 10px;
-    padding: 22px 28px;
-    margin-bottom: 4px;
-}
-.app-header h1 {
-    color: #ffffff !important;
-    font-size: 1.45rem !important;
-    font-weight: 700 !important;
-    margin: 0 0 5px 0 !important;
-    letter-spacing: -0.02em !important;
-    line-height: 1.2 !important;
-}
-.app-header p {
-    color: rgba(255,255,255,0.72) !important;
-    font-size: 0.875rem !important;
-    margin: 0 !important;
-    line-height: 1.55 !important;
-}
-.app-header a { color: #93c5fd !important; text-decoration: none; }
-.app-header a:hover { text-decoration: underline !important; }
+    accumulated = gr.State([])
+    mag_orig    = gr.State(None)
+    mask_orig   = gr.State(None)
 
-/* ── Section labels ──────────────────────────────────────────── */
-.sec-label {
-    font-size: 0.68rem !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.1em !important;
-    text-transform: uppercase !important;
-    color: #64748b !important;
-    margin: 0 0 6px 0 !important;
-    padding-bottom: 6px !important;
-    border-bottom: 1px solid #e2e8f0 !important;
-    display: block !important;
-}
+    with gr.Row(equal_height=False):
 
-/* ── Action buttons ──────────────────────────────────────────── */
-#run-btn > button {
-    font-size: 0.975rem !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.01em !important;
-    height: 52px !important;
-    border-radius: 8px !important;
-}
-#demo-btn > button {
-    height: 52px !important;
-    border-radius: 8px !important;
-    font-weight: 500 !important;
-}
+        # ── Left column: inputs ──────────────────────────────────────
+        with gr.Column(scale=4):
 
-/* ── Demo info box ────────────────────────────────────────────── */
-#demo-info textarea {
-    background: #f0f9ff !important;
-    border-color: #bae6fd !important;
-    font-size: 0.82rem !important;
-    font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace !important;
-    color: #0c4a6e !important;
-}
-
-/* ── Status box ──────────────────────────────────────────────── */
-#status-box {
-    font-size: 0.875rem !important;
-    min-height: 60px !important;
-    padding: 4px 0 !important;
-}
-
-/* ── Preview images ──────────────────────────────────────────── */
-#preview-row .image-container { border-radius: 6px !important; }
-
-/* ── Footer ──────────────────────────────────────────────────── */
-.app-footer {
-    font-size: 0.775rem !important;
-    color: #94a3b8 !important;
-    text-align: center !important;
-    padding: 12px 0 2px 0 !important;
-    border-top: 1px solid #e2e8f0 !important;
-    margin-top: 4px !important;
-    line-height: 1.6 !important;
-}
-.app-footer a { color: #64748b !important; text-decoration: none; }
-.app-footer a:hover { text-decoration: underline !important; }
-
-/* ── Theme toggle button ─────────────────────────────────────── */
-.app-header { position: relative !important; }
-#theme-toggle {
-    position: absolute !important;
-    top: 16px !important;
-    right: 16px !important;
-    background: rgba(255,255,255,0.15) !important;
-    color: #ffffff !important;
-    border: 1px solid rgba(255,255,255,0.35) !important;
-    border-radius: 6px !important;
-    padding: 6px 14px !important;
-    font-size: 0.8rem !important;
-    font-weight: 500 !important;
-    cursor: pointer !important;
-    transition: background 0.2s !important;
-}
-#theme-toggle:hover { background: rgba(255,255,255,0.28) !important; }
-
-/* ── Hide Gradio share button ─────────────────────────────────── */
-.share-button { display: none !important; }
-
-/* ── Preview plots ────────────────────────────────────────────── */
-"""
-
-_THEME = gr.themes.Default(
-    font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
-    font_mono=["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
-    primary_hue=gr.themes.colors.blue,
-    neutral_hue=gr.themes.colors.slate,
-)
-
-_JS = """
-() => {
-    // ── Theme toggle (uses Gradio 6 URL parameter) ──────────────
-    document.addEventListener('click', function(e) {
-        var t = (e.composedPath && e.composedPath()[0]) || e.target;
-        if (t && t.id === 'theme-toggle') {
-            var url = new URL(window.location);
-            var current = url.searchParams.get('__theme');
-            if (!current) {
-                current = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-            }
-            url.searchParams.set('__theme', current === 'dark' ? 'light' : 'dark');
-            window.location.href = url.href;
-        }
-    });
-}
-"""
-
-TITLE = "iQSM — Quantitative Susceptibility Mapping"
-
-
-def build_ui():
-    with gr.Blocks(title=TITLE) as demo:
-
-        # ── Header ──────────────────────────────────────────────────────
-        gr.HTML("""
-        <div class="app-header">
-          <button id="theme-toggle">&#x263D; Dark mode</button>
-          <h1>iQSM &mdash; Quantitative Susceptibility Mapping</h1>
-          <p>
-            Deep learning QSM reconstruction from single-echo MRI phase
-            (<a href="https://doi.org/10.1002/mrm.28578">Sun et al., MRM 2021</a>).
-            Upload your phase NIfTI, verify parameters, and reconstruct.
-            New here? Click <strong style="color:#bfdbfe">⬇ Load Demo Data</strong> to prefill all fields, then click Run.
-          </p>
-        </div>
-        """)
-
-        with gr.Row(equal_height=False):
-
-            # ── Left column: Inputs ──────────────────────────────────────
-            with gr.Column(scale=5, min_width=340):
-
-                gr.HTML('<p class="sec-label">Input</p>')
-
-                phase_file = gr.File(
-                    label="Phase NIfTI (.nii / .nii.gz)",
-                    file_types=[".nii", ".gz"],
+            # ── 1. Phase ──────────────────────────────────────────
+            with gr.Group(elem_classes="dr-section"):
+                gr.Markdown("### Phase  *(multiple 3D echoes OR a single 4D volume; .nii / .nii.gz / .mat)*")
+                phase_input = gr.File(
+                    file_count="multiple",
+                    file_types=[".nii", ".gz", ".mat"],
+                    show_label=False,
+                    height=180,
                 )
-                te_str = gr.Textbox(
-                    label="Echo time — TE (seconds)",
-                    placeholder="e.g.  0.020",
-                    info="Auto-filled from NIfTI header when available. Enter value in seconds.",
+                sorted_order = gr.Textbox(
+                    label="For multiple 3D echo files, confirm ascending TE order; rename files if not sorted correctly",
+                    interactive=False,
+                    placeholder="Upload files to see sorted order",
+                    lines=5,
+                    max_lines=15,
                 )
-                negate_phase = gr.Checkbox(
-                    label="Reverse phase sign",
-                    value=False,
-                    info="Enable if using the opposite scanner convention "
-                         "(veins appear bright in the QSM output).",
+                with gr.Row():
+                    clear_btn = gr.Button("Clear All", variant="stop")
+                    demo_btn  = gr.Button("Load Demo Data", variant="secondary")
+
+            # ── 2. Magnitude ──────────────────────────────────────
+            with gr.Group(elem_classes="dr-section"):
+                gr.Markdown("### Magnitude  *(optional — improves multi-echo weighting; .nii / .nii.gz / .mat)*")
+                mag_file = gr.File(
+                    file_count="single",
+                    file_types=[".nii", ".gz", ".mat"],
+                    show_label=False,
                 )
 
+            # ── 3. Echo Times ──────────────────────────────────────
+            with gr.Group(elem_classes="dr-section"):
+                gr.Markdown("### Echo Times")
+                with gr.Row():
+                    first_te     = gr.Number(label="First TE (ms)", precision=3)
+                    echo_spacing = gr.Number(label="Echo Spacing (ms)", precision=3)
+                    n_echoes     = gr.Number(label="Number of Echoes", precision=0, interactive=True)
+                fill_te_btn = gr.Button("Compute full train of echo times ↓", variant="secondary")
+                te_ms = gr.Textbox(
+                    label="Echo Times (ms)",
+                    placeholder="Single echo: 20    Multi-echo: 4, 8, 12, 16, 20",
+                    info="One value for single-echo; comma-separated for multi-echo. Use fields above for evenly spaced echoes.",
+                )
+
+            # ── 4. Brain Mask ──────────────────────────────────────
+            with gr.Group(elem_classes="dr-section"):
+                gr.Markdown("### Brain Mask  *(optional — if omitted, all voxels are processed; .nii / .nii.gz / .mat)*")
                 mask_file = gr.File(
-                    label="Brain mask NIfTI (optional — full volume used if omitted)",
-                    file_types=[".nii", ".gz"],
-                )
-                with gr.Row():
-                    b0_val = gr.Number(
-                        label="B0 field strength (Tesla)",
-                        value=3.0, minimum=0.1, maximum=14.0, step=0.5,
-                    )
-                    eroded_rad = gr.Slider(
-                        label="Mask erosion (voxels)",
-                        minimum=0, maximum=10, step=1, value=3,
-                    )
-                voxel_str = gr.Textbox(
-                    label="Voxel size — x y z (mm)",
-                    placeholder="e.g.  1 1 2",
-                    info="Auto-filled from NIfTI header. Override if the values look wrong.",
-                )
-
-                with gr.Row():
-                    run_btn  = gr.Button(
-                        "▶  Run Reconstruction", variant="primary",
-                        size="lg", elem_id="run-btn", scale=3,
-                    )
-                    demo_btn = gr.Button(
-                        "⬇  Load Demo Data", variant="secondary",
-                        size="lg", elem_id="demo-btn", scale=1,
-                    )
-
-                demo_info_box = gr.Textbox(
-                    label="Demo dataset",
-                    lines=4, interactive=False, visible=False, elem_id="demo-info",
-                )
-
-            # ── Right column: Results ────────────────────────────────────
-            with gr.Column(scale=5, min_width=340):
-
-                gr.HTML('<p class="sec-label">Results</p>')
-
-                status_box = gr.HTML(
-                    value='<p style="color:#94a3b8;font-size:0.875rem;margin:0">Results will appear here after reconstruction…</p>',
-                    elem_id="status-box",
-                )
-                with gr.Row():
-                    qsm_file = gr.File(label="QSM — susceptibility map (.nii.gz)")
-                    lfs_file = gr.File(label="LFS — tissue field (.nii.gz)")
-
-                gr.HTML('<p class="sec-label" style="margin-top:14px">Preview — QSM (−0.2 to 0.2 ppm) &nbsp;<span style="font-weight:400;font-size:0.78rem;color:#94a3b8">click to fullscreen</span></p>')
-                qsm_preview = gr.Plot(
+                    file_count="single",
+                    file_types=[".nii", ".gz", ".mat"],
                     show_label=False,
-                    elem_id="qsm-preview",
                 )
 
-                gr.HTML('<p class="sec-label" style="margin-top:10px">Preview — LFS tissue field (−0.05 to 0.05 ppm)</p>')
-                lfs_preview = gr.Plot(
-                    show_label=False,
-                    elem_id="lfs-preview",
+            # ── 5. Parameters ─────────────────────────────────────
+            with gr.Group(elem_classes="dr-section"):
+                gr.Markdown("### Parameters")
+                with gr.Row():
+                    b0_val     = gr.Number(value=3.0, label="B0 (Tesla)", minimum=0.1, maximum=14.0, step=0.5)
+                    eroded_rad = gr.Slider(label="Mask erosion (voxels)", minimum=0, maximum=10, step=1, value=3)
+                with gr.Row():
+                    voxel_str    = gr.Textbox(
+                        label="Voxel size — x y z (mm)",
+                        placeholder="e.g.  1 1 2   (leave blank to read from NIfTI header)",
+                    )
+                    negate_phase = gr.Checkbox(
+                        label="Reverse phase sign",
+                        value=False,
+                        info="Enable if iron-rich deep grey matter appears dark (rather than bright) in the QSM output.",
+                    )
+
+            run_btn = gr.Button("Run Pipeline", variant="primary")
+
+        # ── Right column: log + results + vis ───────────────────────
+        with gr.Column(scale=5):
+
+            # ── 6. Log ─────────────────────────────────────────────
+            with gr.Group(elem_classes="dr-section"):
+                gr.Markdown("### Log")
+                log_out = gr.Textbox(
+                    show_label=False, lines=8, max_lines=20,
+                    interactive=False, autoscroll=True,
                 )
 
-        # ── Footer ──────────────────────────────────────────────────────
-        gr.HTML("""
-        <div class="app-footer">
-          Sun H, et al. <em>Leveraging deep neural networks for quantitative susceptibility mapping
-          via residual learning and linear fitting.</em> Magn Reson Med, 2021.
-          <a href="https://doi.org/10.1002/mrm.28578">doi:10.1002/mrm.28578</a>
-          &nbsp;·&nbsp;
-          <a href="https://github.com/sunhongfu/iQSM">github.com/sunhongfu/iQSM</a>
-        </div>
-        """)
+            # ── 7. Results ─────────────────────────────────────────
+            with gr.Group(elem_classes="dr-section"):
+                gr.Markdown("### Results  *(click the file size on the right to download)*")
+                result_file = gr.File(show_label=False, file_count="multiple")
 
-        # ── Wiring ───────────────────────────────────────────────────────
-        phase_file.change(
-            fn=extract_nii_metadata,
-            inputs=[phase_file],
-            outputs=[te_str, voxel_str, b0_val],
+            # ── 8. Visualisation ───────────────────────────────────
+            with gr.Group(elem_classes="dr-section"):
+                gr.Markdown("### Visualisation")
+                with gr.Row():
+                    img_qsm = gr.Image(
+                        label="QSM",
+                        show_download_button=False,
+                        show_fullscreen_button=False,
+                        height=360,
+                    )
+                    img_lfs = gr.Image(
+                        label="LFS",
+                        show_download_button=False,
+                        show_fullscreen_button=False,
+                        height=360,
+                    )
+                with gr.Row(equal_height=True):
+                    prev_btn = gr.Button("◀ Prev", scale=1)
+                    slice_slider = gr.Slider(
+                        minimum=0, maximum=0, value=0, step=1,
+                        show_label=False, container=False,
+                        interactive=True, scale=8,
+                    )
+                    next_btn = gr.Button("Next ▶", scale=1)
+                with gr.Row():
+                    vmin_input     = gr.Number(value=_DISPLAY_VMIN, label="QSM min (ppm)",  precision=3)
+                    vmax_input     = gr.Number(value=_DISPLAY_VMAX, label="QSM max (ppm)",  precision=3)
+                    lfs_vmin_input = gr.Number(value=_LFS_VMIN,     label="LFS min (ppm)",  precision=3)
+                    lfs_vmax_input = gr.Number(value=_LFS_VMAX,     label="LFS max (ppm)",  precision=3)
+            output_state = gr.State((None, None))
+
+    # ── Callbacks ───────────────────────────────────────────────────────
+
+    def add_files(new_files, current):
+        if not new_files:
+            return current, _format_order(current), _detect_echoes(current), None, gr.update()
+        files = new_files if isinstance(new_files, list) else [new_files]
+        new_paths = [str(_to_path(f)) for f in files]
+        new_names = {Path(p).name for p in new_paths}
+        kept = [p for p in current if Path(p).name not in new_names]
+        updated = kept + new_paths
+        voxel_update = gr.update()
+        first_nii = next(
+            (p for p in new_paths
+             if Path(p).name.lower().endswith(".nii") or Path(p).name.lower().endswith(".nii.gz")),
+            None,
+        )
+        if first_nii:
+            try:
+                zooms = nib.load(first_nii).header.get_zooms()
+                voxel_update = gr.update(value=f"{zooms[0]:.4g} {zooms[1]:.4g} {zooms[2]:.4g}")
+            except Exception:
+                pass
+        return updated, _format_order(updated), _detect_echoes(updated), None, voxel_update
+
+    def clear_files():
+        return [], "", None, None, gr.update(value="")
+
+    def compute_te_list(first, spacing, n):
+        if not first or not spacing or not n:
+            return gr.update()
+        tes = [round(first + i * spacing, 4) for i in range(int(n))]
+        return ", ".join(f"{t:g}" for t in tes)
+
+    phase_input.upload(
+        add_files,
+        inputs=[phase_input, accumulated],
+        outputs=[accumulated, sorted_order, n_echoes, phase_input, voxel_str],
+    )
+    clear_btn.click(clear_files, outputs=[accumulated, sorted_order, n_echoes, phase_input, voxel_str])
+    fill_te_btn.click(compute_te_list, inputs=[first_te, echo_spacing, n_echoes], outputs=te_ms)
+    demo_btn.click(
+        load_demo,
+        outputs=[accumulated, sorted_order, n_echoes, first_te, echo_spacing, te_ms,
+                 mag_file, mask_file, voxel_str, b0_val, eroded_rad, negate_phase, mag_orig, mask_orig],
+    )
+    mag_file.upload(lambda f: None, inputs=mag_file, outputs=mag_orig)
+    mask_file.upload(lambda f: None, inputs=mask_file, outputs=mask_orig)
+
+    run_btn.click(
+        run_pipeline,
+        inputs=[accumulated, te_ms, mag_file, mask_file, voxel_str, b0_val, eroded_rad, negate_phase,
+                vmin_input, vmax_input, lfs_vmin_input, lfs_vmax_input, mag_orig, mask_orig],
+        outputs=[log_out, result_file, img_qsm, img_lfs, output_state, slice_slider],
+    )
+
+    def render_slice(state, idx, vmin, vmax, lfs_vmin, lfs_vmax):
+        qsm_path, lfs_path = state if state else (None, None)
+        return (
+            _make_slice_image(qsm_path, idx, vmin,    vmax)    if qsm_path else None,
+            _make_slice_image(lfs_path, idx, lfs_vmin, lfs_vmax) if lfs_path else None,
         )
 
-        _run_outputs  = [status_box, qsm_file, lfs_file, qsm_preview, lfs_preview]
-        _demo_outputs = [
-            phase_file, mask_file, te_str, voxel_str, b0_val, eroded_rad, negate_phase,
-            demo_info_box, status_box,
-        ]
+    def step_slice(current, state, delta):
+        if state is None or state[0] is None:
+            return gr.update()
+        depth = _volume_array(state[0]).shape[2]
+        return max(0, min(int(current) + delta, depth - 1))
 
-        run_btn.click(
-            fn=reconstruct,
-            inputs=[phase_file, te_str, mask_file, voxel_str, b0_val, eroded_rad, negate_phase],
-            outputs=_run_outputs,
-        )
-        demo_btn.click(
-            fn=load_demo_data,
-            inputs=[],
-            outputs=_demo_outputs,
-        )
+    _render_inputs  = [output_state, slice_slider, vmin_input, vmax_input, lfs_vmin_input, lfs_vmax_input]
+    _render_outputs = [img_qsm, img_lfs]
 
-    return demo
+    prev_btn.click(lambda c, s: step_slice(c, s, -1), inputs=[slice_slider, output_state], outputs=slice_slider)
+    next_btn.click(lambda c, s: step_slice(c, s, +1), inputs=[slice_slider, output_state], outputs=slice_slider)
+    slice_slider.change(render_slice, inputs=_render_inputs, outputs=_render_outputs)
+    vmin_input.change(    render_slice, inputs=_render_inputs, outputs=_render_outputs)
+    vmax_input.change(    render_slice, inputs=_render_inputs, outputs=_render_outputs)
+    lfs_vmin_input.change(render_slice, inputs=_render_inputs, outputs=_render_outputs)
+    lfs_vmax_input.change(render_slice, inputs=_render_inputs, outputs=_render_outputs)
 
 
 if __name__ == "__main__":
+    import argparse
     parser = argparse.ArgumentParser(description="iQSM Gradio server")
     parser.add_argument("--server-port", type=int, default=7860)
-    parser.add_argument("--server-name", type=str, default="0.0.0.0")
+    parser.add_argument("--server-name", type=str, default="127.0.0.1")
     args = parser.parse_args()
-
-    demo = build_ui()
-    demo.launch(
-        theme=_THEME,
-        css=_CSS,
-        js=_JS,
-        server_name=args.server_name,
-        server_port=args.server_port,
-        show_error=True,
-        allowed_paths=[tempfile.gettempdir(), _DEMO_DIR],
-    )
+    app.launch(server_name=args.server_name, server_port=args.server_port)
