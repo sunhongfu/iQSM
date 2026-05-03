@@ -1,16 +1,15 @@
-# iQSM – Python dependencies (everything except PyTorch)
+# iQSM – core Python dependencies (CLI inference, no web stack)
 #
 # Manual install:
 #   Apple Silicon / CPU:  pip install torch
 #   Linux AMD64 CPU:      pip install torch --index-url https://download.pytorch.org/whl/cpu
 #   Linux AMD64 GPU:      pip install torch --index-url https://download.pytorch.org/whl/cu121
 # Then:
-#   pip install -r requirements.txt
+#   pip install -r requirements.txt            # CLI only
+#   pip install -r requirements-webapp.txt     # add web app (Gradio + Matplotlib)
 
 numpy>=1.23
 scipy>=1.10
 nibabel>=5.0
-matplotlib>=3.7
-gradio>=6.0
 pydicom>=2.3
 huggingface_hub>=0.20
