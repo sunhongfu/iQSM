@@ -5,20 +5,25 @@ First-time setup (download checkpoints + demo data):
     python run.py --download-checkpoints
     python run.py --download-demo
 
-Run from raw DICOMs (recommended — phase + magnitude auto-separated, TEs read
-from headers):
-    python run.py --dicom_dir /path/to/dicoms
+Have raw DICOMs? Convert them once with the standalone helper, then point
+this script at the converted folder:
+    python dicom_to_nifti.py --dicom_dir /path/to/dicoms --output ./converted
+    python run.py --from_converted ./converted --mask BET_mask.nii
 
-Run from pre-converted NIfTI / MAT files:
-    python run.py --echo_files ph1.nii ph2.nii ph3.nii --te_ms 4 8 12
+The `--from_converted` flag auto-loads phase / magnitude / TEs / voxel size /
+B0 from the folder's `params.json`.
+
+Run from explicit NIfTI / MAT files:
+    python run.py --echo_files ph1.nii ph2.nii ph3.nii --te_ms 4 8 12 --mag mag.nii.gz
     python run.py --echo_4d phase_4d.nii.gz --te_ms 4 8 12 --mag mag_4d.nii.gz
-    python run.py --phase ph.nii.gz --te 0.020 --mask mask.nii.gz
+    python run.py --phase ph.nii.gz --te 0.020 --mag mag.nii.gz --mask mask.nii.gz
 
 YAML config (any CLI arg can be set instead in the config):
     python run.py --config config.yaml
 """
 
 import argparse
+import json
 import shutil
 import sys
 import tempfile
@@ -29,10 +34,7 @@ import numpy as np
 import yaml
 from huggingface_hub import hf_hub_download
 
-from data_utils import (
-    load_array_with_affine,
-    load_dicom_qsm_folder,
-)
+from data_utils import load_array_with_affine
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -101,9 +103,9 @@ def _stage_input(path, work_dir, suffix=""):
 # ---------------------------------------------------------------------------
 
 def _run_multi_echo(phase_paths, te_values_s, mag_path, mask_path, voxel_size,
-                    b0, eroded_rad, phase_sign, output_dir):
-    """Run iQSM/iQFM on each echo and combine with magnitude × TE² weighting
-    (or simple mean if no magnitude). Returns (qsm_path, lfs_path)."""
+                    b0, eroded_rad, phase_sign, output_dir, run_iqfm=True):
+    """Run iQSM (and optionally iQFM) on each echo and combine with magnitude × TE²
+    weighting (or TE²-only weighting if no magnitude). Returns (qsm_path, lfs_path_or_None)."""
     from inference import run_iqsm
 
     work_dir = Path(output_dir)
@@ -142,38 +144,45 @@ def _run_multi_echo(phase_paths, te_values_s, mag_path, mask_path, voxel_size,
             eroded_rad=eroded_rad,
             phase_sign=phase_sign,
             output_dir=str(echo_out),
+            run_iqfm=run_iqfm,
         )
         q_img = nib.load(q_path)
         if affine is None:
             affine = q_img.affine
         qsm_volumes.append(q_img.get_fdata(dtype=np.float32))
-        lfs_volumes.append(nib.load(l_path).get_fdata(dtype=np.float32))
+        if l_path:
+            lfs_volumes.append(nib.load(l_path).get_fdata(dtype=np.float32))
 
     print(f"\nAveraging {len(qsm_volumes)} echoes …")
     qsm_stack = np.stack(qsm_volumes, axis=-1)
-    lfs_stack = np.stack(lfs_volumes, axis=-1)
+    lfs_stack = np.stack(lfs_volumes, axis=-1) if lfs_volumes else None
 
+    te_bc = np.array(te_values_s, dtype=np.float32).reshape(1, 1, 1, -1)
     if mag_path and all(m is not None for m in mag_per_echo):
         print("  Magnitude × TE² weighted averaging")
         mag_data = np.stack(
             [nib.load(m).get_fdata(dtype=np.float32) for m in mag_per_echo],
             axis=-1,
         )
-        te_bc = np.array(te_values_s, dtype=np.float32).reshape(1, 1, 1, -1)
         weights = (mag_data * te_bc) ** 2
         denom = weights.sum(axis=-1, keepdims=True)
         denom[denom == 0] = 1.0
         qsm_avg = (weights * qsm_stack).sum(axis=-1) / denom.squeeze(-1)
-        lfs_avg = (weights * lfs_stack).sum(axis=-1) / denom.squeeze(-1)
+        lfs_avg = ((weights * lfs_stack).sum(axis=-1) / denom.squeeze(-1)
+                   if lfs_stack is not None else None)
     else:
-        print("  Simple mean (no magnitude provided)")
-        qsm_avg = np.mean(qsm_stack, axis=-1)
-        lfs_avg = np.mean(lfs_stack, axis=-1)
+        print("  TE² weighted averaging (no magnitude — uniform mag)")
+        weights = te_bc ** 2
+        qsm_avg = (qsm_stack * weights).sum(axis=-1) / weights.sum()
+        lfs_avg = ((lfs_stack * weights).sum(axis=-1) / weights.sum()
+                   if lfs_stack is not None else None)
 
     qsm_path = str(work_dir / "iQSM.nii.gz")
-    lfs_path = str(work_dir / "iQFM.nii.gz")
     nib.save(nib.Nifti1Image(qsm_avg.astype(np.float32), affine), qsm_path)
-    nib.save(nib.Nifti1Image(lfs_avg.astype(np.float32), affine), lfs_path)
+    lfs_path = None
+    if lfs_avg is not None:
+        lfs_path = str(work_dir / "iQFM.nii.gz")
+        nib.save(nib.Nifti1Image(lfs_avg.astype(np.float32), affine), lfs_path)
     return qsm_path, lfs_path
 
 
@@ -212,12 +221,10 @@ def _build_parser():
                              "Defaults to the current working directory.")
 
     parser.add_argument(
-        "--dicom_dir", metavar="DIR",
-        help="Folder of multi-echo GRE phase (and, optionally, magnitude) DICOMs. "
-             "Files are walked recursively, split into phase vs. magnitude via "
-             "ImageType, grouped by EchoTime, sorted by ImagePositionPatient, "
-             "and saved as one NIfTI per modality in <output>/dicom_converted_nii/. "
-             "TE values, voxel size and B0 are auto-detected from headers.",
+        "--from_converted", metavar="DIR",
+        help="Folder produced by `dicom_to_nifti.py` (contains phase.nii.gz / "
+             "magnitude.nii.gz and a params.json). TE values, voxel size and B0 "
+             "are read from params.json automatically; --mag is auto-filled too.",
     )
     parser.add_argument("--echo_files", nargs="+", metavar="FILE",
                         help="Multiple 3D phase NIfTI / MAT files (one per echo).")
@@ -232,8 +239,10 @@ def _build_parser():
                         help="Echo time(s) in **milliseconds**, e.g. --te_ms 4 8 12.")
 
     parser.add_argument("--mag", metavar="FILE",
-                        help="Magnitude NIfTI / MAT (3D or 4D). Used for "
-                             "magnitude × TE² weighted averaging on multi-echo input.")
+                        help="Optional magnitude NIfTI / MAT (3D or 4D). "
+                             "Used for magnitude × TE² weighted averaging on "
+                             "multi-echo input; without it, multi-echo falls back "
+                             "to TE²-only weighting (uniform magnitude).")
     parser.add_argument("--mask", metavar="FILE",
                         help="Brain mask NIfTI / MAT (optional; ones if omitted).")
     parser.add_argument("--bet_mask", metavar="FILE",
@@ -251,6 +260,11 @@ def _build_parser():
     parser.add_argument("--reverse-phase-sign", type=int, choices=[0, 1], default=0,
                         help="0 = no (default), 1 = yes. Set to 1 if iron-rich "
                              "deep grey matter appears dark in the QSM output.")
+    parser.add_argument("--no-iqfm", dest="run_iqfm", action="store_false",
+                        help="Skip iQFM (tissue field) reconstruction. iQFM only "
+                             "makes sense with a brain mask; it is auto-skipped when "
+                             "no --mask is provided.")
+    parser.set_defaults(run_iqfm=True)
 
     parser.add_argument("--download-checkpoints", action="store_true",
                         help="Download model weights from HuggingFace and exit.")
@@ -318,16 +332,17 @@ def main():
         pass
 
     # ── Determine input mode ────────────────────────────────────────────
-    given = sum(x is not None for x in [args.dicom_dir, args.echo_files,
+    given = sum(x is not None for x in [args.from_converted, args.echo_files,
                                         args.echo_4d, args.phase])
     if given == 0:
         parser.error(
-            "No phase input. Use one of: --dicom_dir, --echo_files, --echo_4d, --phase "
-            "(or set 'phase' / 'echoes' / 'echo_4d' / 'dicom_dir' in --config)."
+            "No phase input. Use one of: --from_converted, --echo_files, --echo_4d, --phase "
+            "(or set 'phase' / 'echoes' / 'echo_4d' / 'from_converted' in --config). "
+            "For raw DICOMs, run `python dicom_to_nifti.py` first."
         )
     if given > 1:
         parser.error(
-            "Provide exactly one of: --dicom_dir, --echo_files, --echo_4d, --phase."
+            "Provide exactly one of: --from_converted, --echo_files, --echo_4d, --phase."
         )
 
     # Output dir
@@ -342,46 +357,54 @@ def main():
 
     # ── Resolve phase files + TE values ─────────────────────────────────
     phase_paths = []
-    mag_path_resolved = None  # may be set by DICOM parsing
+    mag_path_resolved = None
 
-    if args.dicom_dir:
-        dicom_path = _resolve_path(data_dir, args.dicom_dir)
-        if not dicom_path.is_dir():
-            parser.error(f"--dicom_dir is not a directory: {dicom_path}")
-        file_list = [str(p) for p in dicom_path.rglob("*") if p.is_file()]
-        if not file_list:
-            parser.error(f"--dicom_dir contains no files: {dicom_path}")
-        nii_out = output_dir / "dicom_converted_nii"
-        print(f"Parsing DICOMs from {dicom_path}")
-        print(f"Writing converted NIfTI files to {nii_out}")
-        result = load_dicom_qsm_folder(file_list, nii_out)
-        phase_path = result["phase_path"]
-        mag_path_resolved = str(result["mag_path"]) if result["mag_path"] else None
+    if args.from_converted:
+        cdir = _resolve_path(data_dir, args.from_converted)
+        if not cdir.is_dir():
+            parser.error(f"--from_converted is not a directory: {cdir}")
+        params_path = cdir / "params.json"
+        if not params_path.exists():
+            parser.error(
+                f"params.json not found in {cdir}. Did you produce this folder with "
+                "`dicom_to_nifti.py`?"
+            )
+        with open(params_path) as f:
+            params = json.load(f)
+        phase_nii = params.get("phase_nifti")
+        mag_nii   = params.get("magnitude_nifti")
+        if not phase_nii:
+            parser.error(f"params.json in {cdir} has no `phase_nifti` field.")
+        phase_path = cdir / phase_nii
+        if not phase_path.exists():
+            parser.error(f"Phase file missing: {phase_path}")
+        if mag_nii and (cdir / mag_nii).exists():
+            mag_path_resolved = str(cdir / mag_nii)
         # Split if 4D
-        phase_paths = _split_4d(phase_path, work_dir) if len(result["te_values_s"]) > 1 \
-            else [phase_path]
-        te_values_s = list(result["te_values_s"])
-        # Auto-fill voxel size and B0 from DICOM if user didn't specify
-        if args.voxel_size is None and result["voxel_size"]:
-            args.voxel_size = result["voxel_size"]
-            print(f"Voxel size from DICOM: {args.voxel_size}")
-        if args.b0 == 3.0 and result["b0"] is not None:
-            args.b0 = float(result["b0"])
-            print(f"B0 from DICOM: {args.b0} T")
+        phase_paths = (_split_4d(phase_path, work_dir)
+                       if len(params.get("te_ms", [])) > 1 else [phase_path])
+        te_values_s = [float(t) / 1000.0 for t in params.get("te_ms", [])]
+        # Auto-fill voxel size and B0 if user didn't specify
+        if args.voxel_size is None and params.get("voxel_size_mm"):
+            args.voxel_size = params["voxel_size_mm"]
+            print(f"Voxel size from params.json: {args.voxel_size}")
+        if args.b0 == 3.0 and params.get("b0_T") is not None:
+            args.b0 = float(params["b0_T"])
+            print(f"B0 from params.json: {args.b0} T")
         # User-supplied TEs take precedence
         if args.te_ms is not None:
             if len(args.te_ms) != len(te_values_s):
                 parser.error(
-                    f"--te_ms count ({len(args.te_ms)}) doesn't match the number "
-                    f"of parsed echoes ({len(te_values_s)})."
+                    f"--te_ms count ({len(args.te_ms)}) doesn't match number of "
+                    f"echoes in params.json ({len(te_values_s)})."
                 )
             te_values_s = [t / 1000.0 for t in args.te_ms]
             print(f"Using user-supplied TEs (ms): {args.te_ms}")
         elif args.te is not None:
             if len(args.te) != len(te_values_s):
                 parser.error(
-                    f"--te count ({len(args.te)}) doesn't match the number "
-                    f"of parsed echoes ({len(te_values_s)})."
+                    f"--te count ({len(args.te)}) doesn't match number of "
+                    f"echoes in params.json ({len(te_values_s)})."
                 )
             te_values_s = list(args.te)
             print(f"Using user-supplied TEs (s): {args.te}")
@@ -445,7 +468,9 @@ def main():
                     parser.error("Single 3D phase requires exactly one TE.")
                 te_values_s = [args.te[0]]
 
-    # ── Stage magnitude / mask ──────────────────────────────────────────
+    # ── Stage magnitude (optional) / mask ──────────────────────────────
+    # Magnitude is unused for single-echo and falls back to TE²-only weighting
+    # for multi-echo when not supplied.
     mag_arg = args.mag or mag_path_resolved
     if mag_arg:
         mag_src = _resolve_path(data_dir, mag_arg)
@@ -491,9 +516,16 @@ def main():
         print(f"Voxel size (mm) : {' '.join(f'{v:.4g}' for v in args.voxel_size)}")
     else:
         print(f"Voxel size (mm) : (from NIfTI header)")
+    # iQFM only makes sense with a mask — auto-skip otherwise.
+    run_iqfm = bool(args.run_iqfm) and (mask_path is not None)
+    if args.run_iqfm and mask_path is None:
+        print("Note: --no-iqfm implied because no --mask was provided "
+              "(iQFM doesn't make sense on the whole head).")
+
     print(f"B0 (T)          : {args.b0}")
     print(f"Mask erosion    : {args.eroded_rad} voxels")
     print(f"Reverse phase   : {'yes' if phase_sign == 1 else 'no'}")
+    print(f"Run iQFM        : {'yes' if run_iqfm else 'no'}")
     print(f"Output dir      : {output_dir}")
     print("=" * 60)
     print()
@@ -512,6 +544,7 @@ def main():
                 eroded_rad=args.eroded_rad,
                 phase_sign=phase_sign,
                 output_dir=str(output_dir),
+                run_iqfm=run_iqfm,
             )
         else:
             qsm_path, lfs_path = _run_multi_echo(
@@ -524,6 +557,7 @@ def main():
                 eroded_rad=args.eroded_rad,
                 phase_sign=phase_sign,
                 output_dir=output_dir,
+                run_iqfm=run_iqfm,
             )
     except CheckpointNotFoundError as exc:
         print(f"\nError: {exc}\n", flush=True)
@@ -532,7 +566,8 @@ def main():
     print()
     print(f"Outputs:")
     print(f"  QSM (susceptibility): {qsm_path}")
-    print(f"  LFS (tissue field):   {lfs_path}")
+    if lfs_path:
+        print(f"  LFS (tissue field):   {lfs_path}")
 
 
 if __name__ == "__main__":

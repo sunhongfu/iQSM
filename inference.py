@@ -148,7 +148,8 @@ def run_iqsm(
     phase_sign: int = -1,
     output_dir: str | None = None,
     progress_fn=None,
-) -> tuple[str, str]:
+    run_iqfm: bool = True,
+) -> tuple[str, str | None]:
     """
     Run iQSM + iQFM reconstruction in pure Python.
 
@@ -212,20 +213,25 @@ def run_iqsm(
     _log(0.35, "Running iQSM …")
     with torch.inference_mode():
         pred_chi = iqsm(phase_t, mask_t, te_t, b0_t) * mask_t
-        _log(0.65, "Running iQFM …")
-        pred_lfs = iqfm(phase_t, mask_t, te_t, b0_t) * mask_t
+        if run_iqfm:
+            _log(0.65, "Running iQFM …")
+            pred_lfs = iqfm(phase_t, mask_t, te_t, b0_t) * mask_t
+        else:
+            pred_lfs = None
 
     def _to_numpy(t):
         return t.squeeze().cpu().numpy().astype(np.float32)
 
     chi = _zero_remove(_to_numpy(pred_chi), positions)
-    lfs = _zero_remove(_to_numpy(pred_lfs), positions)
+    lfs = _zero_remove(_to_numpy(pred_lfs), positions) if pred_lfs is not None else None
 
     _log(0.90, "Saving …")
     qsm_path = os.path.join(output_dir, "iQSM.nii.gz")
-    lfs_path = os.path.join(output_dir, "iQFM.nii.gz")
     nib.save(nib.Nifti1Image(chi, affine), qsm_path)
-    nib.save(nib.Nifti1Image(lfs, affine), lfs_path)
+    lfs_path = None
+    if lfs is not None:
+        lfs_path = os.path.join(output_dir, "iQFM.nii.gz")
+        nib.save(nib.Nifti1Image(lfs, affine), lfs_path)
 
     _log(1.0, f"Done! Saved to {output_dir}")
     return qsm_path, lfs_path
