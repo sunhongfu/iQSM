@@ -765,7 +765,7 @@ def run_pipeline(phase_files, te_ms_str, mag_files, mask_file,
         try:
             voxel_size = [float(v) for v in voxel_str.replace(",", " ").split()]
         except ValueError:
-            yield ("❌ Invalid voxel size — enter three numbers, e.g. 1 1 2", *_noop)
+            yield ("❌ Invalid voxel size — enter three numbers separated by spaces or commas, e.g. 1 1 2 or 1, 1, 2", *_noop)
             return
         if len(voxel_size) != 3:
             yield ("❌ Voxel size must have exactly 3 values (x y z)", *_noop)
@@ -1165,7 +1165,9 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
             with gr.Row():
                 voxel_str = gr.Textbox(
                     label="Voxel size (mm) — x y z",
-                    placeholder="e.g. 1 1 2  (blank → from NIfTI header)",
+                    placeholder="e.g.  1 1 2    or    1, 1, 2",
+                    info="Three numbers, comma- or space-separated. "
+                         "Leave blank to read from the NIfTI header.",
                 )
                 b0_val = gr.Number(value=3.0, label="B0 (Tesla)",
                                    minimum=0.1, maximum=14.0, step=0.5)
