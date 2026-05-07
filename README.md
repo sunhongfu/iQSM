@@ -15,7 +15,7 @@ iQSM performs single-step, end-to-end local field (iQFM) and susceptibility (QSM
 - **Multi-echo magnitude × TE² weighted combination** — automatic TE²-only fallback when no magnitude is provided.
 - **Echo Selection / Recombine** — after a multi-echo run, exclude noisy short-TE echoes and recombine in seconds (no re-inference).
 - **Browser-based UI** — collapsible sections, live progress log, slice slider, orientation-preview panels (last-echo phase / magnitude / mask), shape verification, dark-mode auto-open with port auto-fallback.
-- **Standalone DICOM helper** — `dicom_to_nifti.py` converts raw GRE DICOMs (phase + magnitude **or** real + imaginary, with optional GE slice-direction chopper correction) into the NIfTI files the web app and CLI consume.
+- **Standalone DICOM helper** — `dicom_to_nifti.py` converts raw GRE DICOMs into the NIfTI files the web app and CLI consume. One folder or many (`--dicom_dir A B …`), any subset of phase / magnitude / real / imaginary; auto-derives phase + magnitude from real + imaginary when both are present (with optional GE slice-direction chopper). Modality flags (`--phase_dir`, `--mag_dir`, …) are a rescue path for mis-tagged DICOMs.
 - **Optional iQFM** — toggleable tissue-field output (`iQFM.nii.gz`); requires a brain mask.
 
 ## Layout
@@ -24,9 +24,9 @@ iQSM performs single-step, end-to-end local field (iQFM) and susceptibility (QSM
 |---|---|
 | `app.py` | Gradio web app for browser-based inference. |
 | `run.py` | Command-line driver (per-echo files, 4D NIfTI, converted folder, or YAML config). |
-| `dicom_to_nifti.py` | Standalone DICOM → NIfTI converter (run once, before `app.py` / `run.py`). |
-| `inference.py` | Pure-Python iQSM / iQFM pipeline. |
-| `data_utils.py` | NIfTI / MAT loaders, shape utilities, DICOM splitter (used by `dicom_to_nifti.py`). |
+| `dicom_to_nifti.py` | Standalone, self-contained DICOM → NIfTI converter (run once, before `app.py` / `run.py`). Byte-identical with the copies in iQSM+ and DeepRelaxo. |
+| `inference.py` | Pure-Python iQSM / iQFM pipeline (single-echo per call; multi-echo combination is in `run.py` / `app.py`). |
+| `data_utils.py` | NIfTI / MAT loaders and shape utilities. |
 | `models/` | LoT-Unet architecture. |
 | `config.yaml` | Example YAML config for `run.py --config`. |
 
@@ -152,42 +152,46 @@ If you're starting from raw DICOMs, do the [DICOM → NIfTI conversion step](#di
 
 ## DICOM → NIfTI conversion
 
-The web app and CLI consume **NIfTI** files, not raw DICOMs (uploading thousands of small DICOMs through a browser is brittle, and the local conversion is one short command). `dicom_to_nifti.py` walks one or more folders, splits modalities by the DICOM `ImageType` tag (with fall-backs to `ComplexImageComponent` and the GE private tag `(0043, 102f)`), groups slices by `EchoTime`, and emits ready-to-use NIfTIs plus a `params.json` you can copy values out of.
+The web app and CLI consume **NIfTI** files, not raw DICOMs (uploading thousands of small DICOMs through a browser is brittle, and the local conversion is one short command). `dicom_to_nifti.py` walks one or more folders, classifies DICOMs by modality, groups slices by `EchoTime`, and emits ready-to-use NIfTIs plus a `params.json` you can paste values out of.
 
-It accepts **either** of the modality combinations a scanner may export:
+The script is **byte-identical with the copies in iQSM+ and DeepRelaxo** — it's intentionally independent of the downstream pipeline. Pick whichever repo's copy is closest at hand.
 
-- **phase (P/PHASE) + magnitude (M/MAGNITUDE)** — used directly, or
-- **real (R/REAL) + imaginary (I/IMAGINARY)** — phase and magnitude are derived from the complex signal:
-  ```
-  phase     = angle(R + 1j·I)
-  magnitude = |R + 1j·I|
-  ```
+### Two modes
 
-When both pairs are present in the same folder, **real + imaginary is preferred**.
-
-### Combined folder (any/all modalities mixed together)
+**Normal path — `--dicom_dir DIR [DIR …]`** &nbsp;·&nbsp; auto-classifies by DICOM `ImageType`, `ComplexImageComponent`, and the GE private tag `(0043, 102f)`. Use this whenever your DICOM tags are reliable. Phase and magnitude in separate folders? Just pass both:
 
 ```bash
-python dicom_to_nifti.py --dicom_dir /path/to/dicoms --out_dir ./converted
+# Single mixed folder (any subset of phase / mag / real / imag):
+python dicom_to_nifti.py --dicom_dir /path/to/dicoms
+
+# Phase and magnitude in separate folders — still auto-classified:
+python dicom_to_nifti.py --dicom_dir /path/to/phase /path/to/magnitude
+
+# Real + imaginary in separate folders. Phase and magnitude are derived
+# from the complex signal:  phase = angle(R+jI),  magnitude = |R+jI|.
+# When both pairs are in one folder, real + imaginary is preferred:
+python dicom_to_nifti.py --dicom_dir /path/to/real /path/to/imaginary
 ```
 
-### Separate folders, phase + magnitude
+**Rescue path — `--phase_dir` / `--mag_dir` / `--real_dir` / `--imag_dir`** &nbsp;·&nbsp; for when tags are wrong, missing, or ambiguous (e.g. `ImageType = ORIGINAL/PRIMARY/OTHER` with no `ComplexImageComponent`). Each folder's files go straight into the named bucket — the auto-classifier is bypassed:
 
 ```bash
-python dicom_to_nifti.py \
-  --phase_dir /path/to/phase_dicoms \
-  --mag_dir   /path/to/magnitude_dicoms \
-  --out_dir   ./converted
+# Phase only — useful when phase DICOMs are mis-tagged and --dicom_dir
+# would route them to the wrong bucket:
+python dicom_to_nifti.py --phase_dir /path/to/phase
+
+# Magnitude only:
+python dicom_to_nifti.py --mag_dir /path/to/magnitude
+
+# Phase + magnitude, both forced:
+python dicom_to_nifti.py --phase_dir /path/to/phase --mag_dir /path/to/magnitude
+
+# Real + imaginary, both forced (must be paired — the complex signal
+# can't be formed from one alone):
+python dicom_to_nifti.py --real_dir /path/to/real --imag_dir /path/to/imaginary
 ```
 
-### Separate folders, real + imaginary (phase + magnitude derived)
-
-```bash
-python dicom_to_nifti.py \
-  --real_dir /path/to/real_dicoms \
-  --imag_dir /path/to/imaginary_dicoms \
-  --out_dir  ./converted
-```
+The two modes can't be mixed (`--dicom_dir` together with any rescue flag is rejected). They represent two different mental models — *trust the tags* vs *override the tags*.
 
 ### GE slice-direction chopper (real + imaginary only)
 
@@ -213,23 +217,23 @@ You'll see a copy-paste-friendly summary:
 ─────────────────────────────────────────────────────────
 ```
 
-The output folder will contain (names depend on echo count):
+The output folder will contain (names depend on echo count, and on which modalities were present):
 
 ```text
 converted/
-├── dcm_converted_phase[_4d].nii.gz
-├── dcm_converted_magnitude[_4d].nii.gz
+├── dcm_converted_phase[_4d].nii.gz       # 3D for single-echo, 4D for multi-echo
+├── dcm_converted_magnitude[_4d].nii.gz   # written if magnitude was present / derived
 └── params.json
 ```
 
-`params.json` carries both machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_dir`) and **copy-paste strings** formatted exactly the way the web app's input fields expect — `te_ms_string`, `voxel_size_string`, `b0_dir_string`. Open the JSON, copy the relevant string, paste into the form. Or skip the form altogether and use the CLI's `--from_converted` flag (auto-fills everything from the same JSON).
+`params.json` carries machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_dir`) and **copy-paste strings** (`te_ms_string`, `voxel_size_string`, `b0_dir_string`) formatted exactly the way the web app's input fields expect them. Open the JSON, copy the relevant string, paste into the form. Or skip the form altogether and use the CLI's `--from_converted` flag (auto-fills everything from the same JSON).
+
+> **`--out_dir` is overwritten in place on each run.** A single consolidated `params.json` is written (not per-NIfTI sidecars — phase and magnitude share their metadata). If `params.json` or any `dcm_converted_*.nii(.gz)` already exists in `--out_dir`, the script lists them and prints a clear warning before overwriting. Use a fresh `--out_dir` per subject / acquisition. To convert phase + magnitude that live in separate DICOM folders, pass both folders to one `--dicom_dir` invocation rather than two runs into the same folder.
 
 `python dicom_to_nifti.py --help` lists all flags. The output folder feeds directly into:
 
 - the **web app** (drop the NIfTIs into the upload buttons; paste the copy-paste strings from `params.json` into the form), or
 - the **CLI** (`run.py --from_converted ./converted` reads `params.json` automatically — no retyping).
-
-> The **same `dicom_to_nifti.py` ships byte-identically with iQSM, iQSM+, and DeepRelaxo** — the script is independent of the downstream pipeline. Pick whichever copy is closest at hand; the output is generic enough for any of them (or any other QSM / R2* tool).
 
 ---
 
