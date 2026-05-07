@@ -205,11 +205,12 @@ python dicom_to_nifti.py --dicom_dir /path/to/dicoms --chopper off  # never appl
 You'll see a copy-paste-friendly summary:
 
 ```text
-─── Acquisition values ───
+─── Acquisition values (paste these into the web app) ───
   Echo Times (ms)  : 4.92, 9.84, 14.76, 19.68, 24.6
   Voxel size (mm)  : 1 1 2
   B0 (Tesla)       : 3.0
-──────────────────────────
+  B0 direction     : 0 0 1
+─────────────────────────────────────────────────────────
 ```
 
 The output folder will contain (names depend on echo count):
@@ -221,10 +222,14 @@ converted/
 └── params.json
 ```
 
+`params.json` carries both machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_dir`) and **copy-paste strings** formatted exactly the way the web app's input fields expect — `te_ms_string`, `voxel_size_string`, `b0_dir_string`. Open the JSON, copy the relevant string, paste into the form. Or skip the form altogether and use the CLI's `--from_converted` flag (auto-fills everything from the same JSON).
+
 `python dicom_to_nifti.py --help` lists all flags. The output folder feeds directly into:
 
-- the **web app** (drop the NIfTIs into the upload buttons; copy values from `params.json` into the form), or
+- the **web app** (drop the NIfTIs into the upload buttons; paste the copy-paste strings from `params.json` into the form), or
 - the **CLI** (`run.py --from_converted ./converted` reads `params.json` automatically — no retyping).
+
+> The **same `dicom_to_nifti.py` ships byte-identically with iQSM, iQSM+, and DeepRelaxo** — the script is independent of the downstream pipeline. Pick whichever copy is closest at hand; the output is generic enough for any of them (or any other QSM / R2* tool).
 
 ---
 
