@@ -1055,13 +1055,11 @@ CUSTOM_CSS = """
 #dr-sorted-files .upload-button,
 #dr-sorted-files button:has(svg.feather-upload),
 #dr-sorted-files .icon-button-wrapper.top-panel,
-#dr-sorted-files .label-clear-button,
 #dr-sorted-mag-files .upload-container,
 #dr-sorted-mag-files .wrap.svelte-12ioyct,
 #dr-sorted-mag-files .upload-button,
 #dr-sorted-mag-files button:has(svg.feather-upload),
-#dr-sorted-mag-files .icon-button-wrapper.top-panel,
-#dr-sorted-mag-files .label-clear-button {
+#dr-sorted-mag-files .icon-button-wrapper.top-panel {
     display: none !important;
 }
 /* Hide native X on mask file display — explicit Remove button handles it */
