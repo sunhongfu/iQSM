@@ -1133,12 +1133,11 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
         with gr.Accordion("Echo Order", open=False,
                           elem_classes=["dr-section", "dr-accordion"]) as order_group:
             gr.Markdown(
-                "Sets the order in which echoes are processed. **Only relevant when "
-                "you uploaded multiple 3D files (one per echo) for a multi-echo "
-                "dataset.** Files are sorted naturally by filename (`mag1`, `mag2`, "
-                "…, `mag10`); rename them if the auto-sort gets it wrong. When both "
-                "modalities are supplied as 3D-per-echo files, the two columns must "
-                "have matching echo counts."
+                "Set the echo order when uploaded multiple 3D files (one per echo) "
+                "for a multi-echo dataset. Files are sorted naturally by filename "
+                "(`mag1`, `mag2`, …, `mag10`); rename them if the auto-sort gets it "
+                "wrong. When both modalities are supplied as 3D-per-echo files, the "
+                "two columns must have matching echo counts."
             )
             with gr.Row(equal_height=True):
                 with gr.Column():
