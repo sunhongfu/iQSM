@@ -1202,6 +1202,7 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
                 file_count="single",
                 file_types=[".nii", ".nii.gz", ".gz", ".mat"],
                 variant="primary",
+                elem_classes="dr-upload-btn",
             )
             mask_file = gr.File(
                 file_count="single",
