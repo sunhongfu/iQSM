@@ -226,7 +226,7 @@ converted/
 └── params.json
 ```
 
-`params.json` carries machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_dir`) and **copy-paste strings** (`te_ms_string`, `voxel_size_string`, `b0_dir_string`) formatted exactly the way the web app's input fields expect them. Open the JSON, copy the relevant string, paste into the form. Or skip the form altogether and use the CLI's `--from_converted` flag (auto-fills everything from the same JSON).
+`params.json` carries machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_direction`) and **copy-paste strings** (`te_ms_string`, `voxel_size_string`, `b0_direction_string`) formatted exactly the way the web app's input fields expect them. Open the JSON, copy the relevant string, paste into the form. Or skip the form altogether and use the CLI's `--from_converted` flag (auto-fills everything from the same JSON).
 
 > **`--out_dir` is overwritten in place on each run.** A single consolidated `params.json` is written (not per-NIfTI sidecars — phase and magnitude share their metadata). If `params.json` or any `dcm_converted_*.nii(.gz)` already exists in `--out_dir`, the script lists them and prints a clear warning before overwriting. Use a fresh `--out_dir` per subject / acquisition. To convert phase + magnitude that live in separate DICOM folders, pass both folders to one `--dicom_dir` invocation rather than two runs into the same folder.
 
