@@ -806,14 +806,27 @@ def run_pipeline(phase_files, te_ms_str, mag_files, mask_file,
 # ---------------------------------------------------------------------------
 
 CUSTOM_CSS = """
+/* ── Shared visual scale (kept identical across iQSM / iQSM+ / DeepRelaxo) ── */
 .gradio-container {
     --text-md: 17px;
     --block-info-text-size: 15px;
     --block-label-text-size: 16px;
     --block-title-text-size: 18px;
     font-size: 17px !important;
-    line-height: 1.55 !important;
+    line-height: 1.5 !important;
 }
+.gradio-container .prose,
+.gradio-container .prose p,
+.gradio-container .prose li,
+.gradio-container .markdown,
+.gradio-container .markdown p {
+    font-size: 17px !important;
+    line-height: 1.5 !important;
+    margin: 4px 0 6px 0 !important;
+}
+.gradio-container input,
+.gradio-container textarea,
+.gradio-container select { font-size: 16px !important; }
 .gradio-container button { font-size: 16px !important; }
 
 /* Section titles */
@@ -822,7 +835,7 @@ CUSTOM_CSS = """
     padding: 4px 0 6px 14px !important;
     color: #1d4ed8 !important;
     border-left: 5px solid #1d4ed8 !important;
-    margin: 8px 0 14px 4px !important;
+    margin: 6px 0 10px 4px !important;
 }
 .dark .gradio-container h3 {
     color: #60a5fa !important;
@@ -831,8 +844,8 @@ CUSTOM_CSS = """
 
 /* Section panels */
 .dr-section {
-    margin-bottom: 24px !important;
-    padding: 16px 20px !important;
+    margin-bottom: 16px !important;
+    padding: 12px 18px !important;
     border: 2px solid #4b5563 !important;
     border-radius: 10px !important;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
@@ -842,6 +855,25 @@ CUSTOM_CSS = """
     border-color: #9ca3af !important;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30) !important;
 }
+
+/* Markdown inside sections — denser paragraph + list spacing */
+.dr-section .prose,
+.dr-section .markdown,
+.dr-section .gradio-markdown { padding: 0 6px !important; }
+.dr-section .prose p,
+.dr-section .markdown p {
+    margin: 4px 0 6px 0 !important;
+    padding-left: 4px !important;
+}
+.dr-section .prose ul,
+.dr-section .prose ol,
+.dr-section .markdown ul,
+.dr-section .markdown ol {
+    padding-left: 28px !important;
+    margin: 4px 0 6px 0 !important;
+}
+.dr-section .prose li,
+.dr-section .markdown li { margin: 2px 0 !important; }
 
 /* Common height for all action buttons so the form looks consistent. */
 #dr-run-btn,         #dr-run-btn         button,
@@ -956,6 +988,7 @@ CUSTOM_CSS = """
 
 /* Accordion label — match h3 */
 .dr-accordion > .label-wrap,
+.dr-accordion > div > .label-wrap,
 .dr-accordion button.label-wrap,
 .dr-accordion > .label-wrap span,
 .dr-accordion button.label-wrap span {
@@ -964,13 +997,15 @@ CUSTOM_CSS = """
     color: #1d4ed8 !important;
 }
 .dr-accordion > .label-wrap,
+.dr-accordion > div > .label-wrap,
 .dr-accordion button.label-wrap {
     border-left: 5px solid #1d4ed8 !important;
-    padding: 6px 0 6px 14px !important;
-    margin: 4px 0 8px 4px !important;
+    padding: 4px 0 4px 14px !important;
+    margin: 2px 0 6px 4px !important;
     background: transparent !important;
 }
 .dark .dr-accordion > .label-wrap,
+.dark .dr-accordion > div > .label-wrap,
 .dark .dr-accordion button.label-wrap,
 .dark .dr-accordion > .label-wrap span,
 .dark .dr-accordion button.label-wrap span {
@@ -980,11 +1015,21 @@ CUSTOM_CSS = """
 .dr-accordion,
 .dr-accordion > div,
 .dr-accordion > div > div,
-.dr-accordion .accordion-content {
+.dr-accordion .open,
+.dr-accordion .accordion-content,
+.dr-accordion > div:not(.label-wrap) {
     background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
 }
 .dr-section.dr-accordion {
     background: var(--block-background-fill) !important;
+    border: 2px solid #4b5563 !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
+}
+.dark .dr-section.dr-accordion {
+    border-color: #9ca3af !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30) !important;
 }
 
 /* Phase + Magnitude upload buttons — keep them the same fixed size and
@@ -1036,7 +1081,7 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
     gr.Markdown(
         "# iQSM — Instant Quantitative Susceptibility Mapping\n"
         "<span style='font-size: 1.2em'>"
-        "🐙 [GitHub](https://github.com/sunhongfu/iQSM)"
+        "🐙 [GitHub](https://github.com/sunhongfu/iQSM#web-app)"
         " &nbsp;·&nbsp; "
         "📄 [Paper (NeuroImage)](https://www.sciencedirect.com/science/article/pii/S1053811922005274)"
         " &nbsp;·&nbsp; "

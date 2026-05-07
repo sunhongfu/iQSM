@@ -8,6 +8,8 @@ iQSM performs single-step, end-to-end local field (iQFM) and susceptibility (QSM
 
 > **Tip:** for data with resolution finer than 0.7 mm isotropic, interpolate to 1 mm before reconstruction for best results.
 
+**Jump to:** [Highlights](#highlights) · [Layout](#layout) · [Overview](#overview) · [Quick Start](#quick-start) · [DICOM → NIfTI conversion](#dicom--nifti-conversion) · [Web App](#web-app) · [Command-Line Interface](#command-line-interface) · [Run Demo Examples](#run-demo-examples) · [Troubleshooting](#troubleshooting) · [Citation](#citation)
+
 ## Highlights
 
 - **Single-step QSM from raw phase** — phase unwrapping and background field removal happen inside the network.
