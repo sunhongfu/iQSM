@@ -1095,17 +1095,14 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
         with gr.Accordion("Phase + Magnitude Input", open=True,
                           elem_classes=["dr-section", "dr-accordion"]):
             gr.Markdown(
-                "GRE phase + (optional) magnitude — **single-echo** (one 3D file) "
+                "GRE raw phase + (optional) magnitude — **single-echo** (one 3D file) "
                 "or **multi-echo** (multiple 3D files, one per echo, **or** a single "
                 "4D volume). Supported: `.nii`, `.nii.gz`, `.mat`.\n\n"
-                "Raw (wrapped) phase is required. Magnitude is optional — used for "
-                "magnitude × TE² weighted combination on multi-echo input; "
-                "single-echo runs and the orientation-preview panel after the run "
-                "are the only places it shows up otherwise.\n\n"
+
                 "Have raw DICOMs? See "
                 "[DICOM → NIfTI conversion]"
-                "(https://github.com/sunhongfu/iQSM#dicom--nifti-conversion) "
-                "in the GitHub repo, or run `python dicom_to_nifti.py --help`."
+                "(https://github.com/sunhongfu/iQSM#dicom--nifti-conversion), "
+                "or run `python dicom_to_nifti.py --help`."
             )
             with gr.Row(equal_height=True, elem_classes="dr-upload-row"):
                 with gr.Column():
@@ -1131,9 +1128,8 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
         with gr.Accordion("Files Processing", open=False,
                           elem_classes=["dr-section", "dr-accordion"]) as order_group:
             gr.Markdown(
-                "Set the echo order when uploaded multiple 3D files (one per echo) "
-                "for a multi-echo dataset. Files are sorted naturally by filename "
-                "(`mag1`, `mag2`, …, `mag10`); rename them if the auto-sort gets it "
+                "If per-echo files are selected, echo order is sorted naturally below by "
+                "filename (`mag1`, `mag2`, …, `mag10`); rename them if the auto-sort gets it "
                 "wrong. When both modalities are supplied as 3D-per-echo files, the "
                 "two columns must have matching echo counts."
             )
