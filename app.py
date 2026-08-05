@@ -207,7 +207,7 @@ def _make_slice_image(nii_path, slice_idx=None, vmin=-0.2, vmax=0.2,
 # ---------------------------------------------------------------------------
 
 def _print_run_config(work_dir, mode, phase_paths, te_list_ms, mag_path, mask_path,
-                      voxel_size, b0, eroded_rad, phase_sign):
+                      voxel_size, b0, eroded_rad, phase_sign, auto_bet2=True):
     print("============================")
     print("RUN CONFIGURATION")
     print("============================")
@@ -245,6 +245,8 @@ def _print_run_config(work_dir, mode, phase_paths, te_list_ms, mag_path, mask_pa
         cmd.append(f"--mag {Path(mag_path).name}")
     if mask_path:
         cmd.append(f"--mask {Path(mask_path).name}")
+    elif not auto_bet2:
+        cmd.append("--no_bet2")
     if voxel_size:
         cmd.append("--voxel-size " + " ".join(f"{v:.4g}" for v in voxel_size))
     if b0 != 3.0:
@@ -281,7 +283,7 @@ def _gpu_cleanup():
 
 def _run_thread(job, work_dir, mode, phase_paths, te_list_ms, mag_path, mask_path,
                 voxel_size, b0, eroded_rad, phase_sign, run_iqfm,
-                vmin, vmax, lfs_vmin, lfs_vmax):
+                vmin, vmax, lfs_vmin, lfs_vmax, auto_bet2):
     log_q = job["log_queue"]
     orig = sys.stdout
     sys.stdout = _QueueWriter(log_q, orig)
@@ -290,8 +292,20 @@ def _run_thread(job, work_dir, mode, phase_paths, te_list_ms, mag_path, mask_pat
             job["status"] = "running"
             te_list_s = [t / 1000.0 for t in te_list_ms]
 
+            if mask_path is None and mag_path and auto_bet2:
+                print("No brain mask supplied -- running bet2 automatic brain "
+                      "extraction on magnitude...")
+                from bet2_utils import run_bet2, first_3d_volume
+                mag_3d_path = first_3d_volume(mag_path, str(work_dir))
+                bet2_mask = run_bet2(mag_3d_path, str(work_dir))
+                if bet2_mask:
+                    mask_path = bet2_mask
+                else:
+                    print("Continuing without a brain mask (whole-head).")
+
             _print_run_config(work_dir, mode, phase_paths, te_list_ms, mag_path,
-                              mask_path, voxel_size, b0, eroded_rad, phase_sign)
+                              mask_path, voxel_size, b0, eroded_rad, phase_sign,
+                              auto_bet2)
 
             # Expand 4D NIfTI into per-echo files
             if mode == "4d":
@@ -646,7 +660,7 @@ def _stream_job(job):
 # Pipeline callback
 # ---------------------------------------------------------------------------
 
-def run_pipeline(phase_files, te_ms_str, mag_files, mask_file,
+def run_pipeline(phase_files, te_ms_str, mag_files, mask_file, auto_bet2,
                  voxel_str, b0_val, eroded_rad, negate_phase, run_iqfm,
                  vmin, vmax, lfs_vmin, lfs_vmax):
     _noop = (
@@ -794,7 +808,7 @@ def run_pipeline(phase_files, te_ms_str, mag_files, mask_file,
         target=_run_thread,
         args=(job, work_dir, mode, phase_paths, te_list_ms, mag_path, mask_path,
               voxel_size, float(b0_val), int(eroded_rad), phase_sign, bool(run_iqfm),
-              float(vmin), float(vmax), float(lfs_vmin), float(lfs_vmax)),
+              float(vmin), float(vmax), float(lfs_vmin), float(lfs_vmax), bool(auto_bet2)),
         daemon=True,
     ).start()
 
@@ -1188,7 +1202,10 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
             gr.Markdown(
                 "A brain mask improves **iQSM reconstruction quality** and enables "
                 "**iQFM** — the local tissue field map (i.e., the background-field-"
-                "removal result).\n\n"
+                "removal result). If you don't upload one and magnitude is provided "
+                "above, one is **generated automatically via bet2** when you click "
+                "Run — uncheck the box below to skip that and reconstruct whole-head "
+                "instead.\n\n"
                 "Default mask erosion is **3 voxels**; adjust under "
                 "**Acquisition & Hyper-parameters** below if you'd rather retain "
                 "more of the cortical brain region.\n\n"
@@ -1219,6 +1236,13 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
                 visible=False,
                 elem_id="dr-mask-clear-btn",
             )
+            auto_bet2_cb = gr.Checkbox(
+                label="Auto brain-extract via bet2 if no mask is uploaded",
+                value=True,
+                info="Runs FSL's bet2 on the magnitude volume when no mask is "
+                     "supplied above. Requires magnitude input (Phase + Magnitude "
+                     "Input panel). Ignored once you upload a mask directly.",
+            )
 
         # ── 5. Acquisition + Hyper-parameters ────────────────────────
         with gr.Accordion("Acquisition & Hyper-parameters", open=False,
@@ -1235,10 +1259,11 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
             with gr.Row():
                 eroded_rad = gr.Slider(
                     label="Mask erosion radius (voxels)",
-                    minimum=0, maximum=10, step=1, value=0,
-                    interactive=False,
-                    info="Disabled when no brain mask is provided "
-                         "(erosion has no effect without a mask).",
+                    minimum=0, maximum=10, step=1, value=3,
+                    interactive=True,
+                    info="Applies to any brain mask used, uploaded or "
+                         "bet2-auto-generated. Has no effect on whole-head runs "
+                         "(no mask at all).",
                 )
                 negate_phase = gr.Checkbox(
                     label="Reverse phase sign",
@@ -1249,9 +1274,10 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
             run_iqfm_cb = gr.Checkbox(
                 label="Run iQFM (tissue field)",
                 value=False,
-                interactive=False,
+                interactive=True,
                 info="Reconstruct the local tissue field (LFS) in addition to QSM. "
-                     "Requires a brain mask — disabled until one is provided.",
+                     "Requires a brain mask (uploaded, or bet2-auto-generated) -- "
+                     "skipped (noted in the log) if none ends up being used.",
             )
 
         run_btn = gr.Button("Run Reconstruction", variant="primary",
@@ -1597,16 +1623,14 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
     def on_mask_upload(uploaded, accumulated_paths, progress=gr.Progress()):
         if uploaded is None:
             return (gr.update(value=None, visible=False), "", gr.update(visible=False),
-                    gr.update(value=False, interactive=False),
-                    gr.update(value=0, interactive=False))
+                    gr.update(), gr.update())
         progress(0.3, desc="Reading mask file…")
         info = show_mask_info(uploaded, accumulated_paths)
         progress(1.0, desc="Done")
-        # Mask now available → unlock the iQFM checkbox (left unchecked — opt-in)
-        # and the erosion slider (default 3).
+        # Both iQFM and erosion are already unlocked by default (bet2 can supply a
+        # mask even without an upload) -- just reset erosion to its default here.
         return (gr.update(value=uploaded, visible=True), info, gr.update(visible=True),
-                gr.update(value=False, interactive=True),
-                gr.update(value=3, interactive=True))
+                gr.update(), gr.update(value=3))
 
     mask_button.click(
         lambda: _RED_WAIT.format(
@@ -1624,8 +1648,7 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
         # Only fire on transitions to "no mask"; non-None changes are no-ops.
         if value is None:
             return (gr.update(value=None, visible=False), "", gr.update(visible=False),
-                    gr.update(value=False, interactive=False),
-                    gr.update(value=0, interactive=False))
+                    gr.update(), gr.update())
         return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     mask_file.change(on_mask_change, inputs=mask_file,
                      outputs=[mask_file, mask_info, mask_clear_btn, run_iqfm_cb, eroded_rad])
@@ -1633,16 +1656,15 @@ with gr.Blocks(title="iQSM", analytics_enabled=False) as app:
     _mask_clear_outputs = [mask_file, mask_info, mask_clear_btn, run_iqfm_cb, eroded_rad]
     _mask_clear_returns = (gr.update(value=None, visible=False), "",
                            gr.update(visible=False),
-                           gr.update(value=False, interactive=False),
-                           gr.update(value=0, interactive=False))
+                           gr.update(), gr.update())
     mask_file.delete(    lambda: _mask_clear_returns, outputs=_mask_clear_outputs)
     mask_clear_btn.click(lambda: _mask_clear_returns, outputs=_mask_clear_outputs)
 
     # Run pipeline
     run_btn.click(
         run_pipeline,
-        inputs=[accumulated_phase, te_ms, accumulated_mag, mask_file, voxel_str,
-                b0_val, eroded_rad, negate_phase, run_iqfm_cb,
+        inputs=[accumulated_phase, te_ms, accumulated_mag, mask_file, auto_bet2_cb,
+                voxel_str, b0_val, eroded_rad, negate_phase, run_iqfm_cb,
                 vmin_input, vmax_input, lfs_vmin_input, lfs_vmax_input],
         outputs=[log_out, result_file, result_info,
                  img_qsm, img_lfs, img_phase, img_mag, img_mask,
